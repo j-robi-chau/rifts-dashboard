@@ -1,0 +1,157 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --card: #151d34;
+  --card-alt: #1d2947;
+  --text: #eff4ff;
+  --muted: #abc0ea;
+  --accent: #67e8f9;
+  --danger: #fb7185;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: radial-gradient(circle at top, #1b2f63 0%, var(--bg) 40%);
+  color: var(--text);
+}
+
+.dashboard {
+  width: min(1100px, 100% - 2rem);
+  margin: 2rem auto 3rem;
+  display: grid;
+  gap: 1rem;
+}
+
+header p {
+  margin-top: 0;
+  color: var(--muted);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: linear-gradient(160deg, var(--card), var(--card-alt));
+  border: 1px solid #2c3d66;
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.stat-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stat-source {
+  margin: 0.2rem 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.stat-current {
+  font-size: 1.2rem;
+  color: var(--accent);
+}
+
+.controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 9px;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  background: #2563eb;
+  color: white;
+}
+
+button.secondary {
+  background: #3b4d72;
+}
+
+button.danger {
+  background: #be123c;
+}
+
+.meta {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  color: var(--text);
+}
+
+label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--muted);
+}
+
+.resource-form,
+.ammo-form {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: end;
+}
+
+.ammo-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.ammo-item {
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.action-log-card textarea,
+.notes-card textarea {
+  margin: 0.5rem 0;
+}
+
+@media (max-width: 680px) {
+  .ammo-item,
+  .meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
