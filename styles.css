@@ -176,6 +176,14 @@ textarea:focus-visible,
   flex-wrap: wrap;
 }
 
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
 .stats-grid {
   display: grid;
   gap: 0.65rem;
@@ -215,6 +223,18 @@ textarea:focus-visible,
 
 .checkbox-label input {
   width: auto;
+}
+
+.history-edit-controls {
+  margin-top: 0.35rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.history-edit-input {
+  min-width: 200px;
+  flex: 1;
 }
 
 .empty-state p {

@@ -52,7 +52,10 @@
               </div>
             </div>
 
-            <h3>Core Stats</h3>
+            <div class="stats-header">
+              <h3>Core Stats</h3>
+              <button id="add-stat-block" type="button" class="secondary">+ Add Stat Block</button>
+            </div>
             <div id="stats-grid" class="stats-grid"></div>
 
             <h3>Notes</h3>
@@ -92,8 +95,8 @@
         <h2>Log Entry</h2>
         <p id="log-dialog-context"></p>
         <label>
-          Why did this change happen?
-          <input id="log-reason" type="text" maxlength="120" placeholder="e.g. cast Armor of Ithan" required />
+          Reason (optional)
+          <input id="log-reason" type="text" maxlength="120" placeholder="e.g. cast Armor of Ithan" />
         </label>
         <menu>
           <button value="cancel" type="submit" class="secondary">Cancel</button>
@@ -116,6 +119,10 @@
         <label>
           Base MDC
           <input id="base-mdc" type="number" min="0" required />
+        </label>
+        <label>
+          Base HP
+          <input id="base-hp" type="number" min="0" required />
         </label>
         <label>
           Base Attacks per melee
