@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RIFTS Combat Resource Dashboard</title>
+    <title>RIFTS Stat Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="dashboard">
       <header>
-        <h1>RIFTS Resource Dashboard</h1>
-        <p>Track core combat resources in real time during sessions.</p>
+        <h1>RIFTS Stat Dashboard</h1>
+        <p>Track PPE, MDC, SDC, HP, ammunition, and other encounter resources.</p>
       </header>
 
       <section class="card add-resource-card">
@@ -18,21 +18,11 @@
         <form id="resource-form" class="resource-form">
           <label>
             Stat type
-            <select id="resource-type">
-              <option value="PPE">PPE</option>
-              <option value="MDC">MDC</option>
-              <option value="SDC">SDC</option>
-              <option value="ISP">ISP</option>
-              <option value="HP">HP</option>
-            </select>
+            <select id="resource-type"></select>
           </label>
           <label>
-            Block label
+            Block title
             <input type="text" id="resource-label" placeholder="e.g. Energy Shield" />
-          </label>
-          <label>
-            Source
-            <input type="text" id="resource-source" placeholder="e.g. Armor of Ithan spell" />
           </label>
           <label>
             Max value
@@ -42,56 +32,48 @@
         </form>
       </section>
 
-      <section class="card-grid" id="resource-grid"></section>
+      <section id="stat-sections" class="stat-sections"></section>
 
       <section class="card action-log-card">
         <h2>Action Log</h2>
         <textarea
           id="action-log-output"
-          rows="8"
-          placeholder="Action log entries appear here and are editable before moving to Encounter Notes."
+          rows="9"
+          placeholder="Stat adjustments will appear here."
+          readonly
         ></textarea>
         <div class="controls">
-          <button id="append-log-to-notes" type="button">Append Log to Encounter Notes</button>
           <button id="clear-log" class="secondary" type="button">Clear Log</button>
         </div>
-      </section>
-
-      <section class="card ammo-card">
-        <h2>Ammunition Tracker</h2>
-        <form id="ammo-form" class="ammo-form">
-          <label>
-            Weapon name
-            <input type="text" id="weapon-name" required placeholder="e.g. C-27 Pulse Rifle" />
-          </label>
-          <label>
-            Max rounds
-            <input type="number" id="weapon-max" required min="1" value="20" />
-          </label>
-          <button type="submit">Add Weapon</button>
-        </form>
-
-        <ul id="ammo-list" class="ammo-list"></ul>
       </section>
 
       <section class="card notes-card">
         <h2>Encounter Notes</h2>
         <textarea
           id="session-notes"
-          placeholder="Track spell expenditures, conditions, targets, and tactical notes..."
-          rows="8"
+          placeholder="Colloquial summaries of your action log will appear here..."
+          rows="9"
         ></textarea>
         <button id="clear-notes" class="secondary" type="button">Clear Notes</button>
       </section>
     </main>
 
+    <template id="stat-group-template">
+      <section class="card stat-group">
+        <div class="group-header">
+          <h2 class="group-title"></h2>
+          <button class="add-section" type="button">+ Add Section</button>
+        </div>
+        <div class="card-grid group-grid"></div>
+      </section>
+    </template>
+
     <template id="resource-template">
       <article class="card stat-card">
         <div class="stat-heading">
-          <h2 class="stat-title"></h2>
+          <input class="section-title" type="text" value="Base" aria-label="Section title" />
           <button class="danger remove-resource" type="button" title="Delete this block">-</button>
         </div>
-        <p class="stat-source"></p>
         <p class="stat-current"></p>
         <div class="controls">
           <button class="change" data-action="-10" type="button">-10</button>
@@ -100,34 +82,11 @@
           <button class="change" data-action="+10" type="button">+10</button>
         </div>
         <label>
-          Adjustment note
-          <input class="adjust-note" type="text" placeholder="e.g. Hit by a punch" />
+          Max
+          <input class="max-input" type="number" min="0" />
         </label>
-        <div class="meta">
-          <label>
-            Max
-            <input class="max-input" type="number" min="0" />
-          </label>
-          <button class="secondary reset" type="button">Reset</button>
-        </div>
+        <button class="secondary reset" type="button">Reset</button>
       </article>
-    </template>
-
-    <template id="ammo-item-template">
-      <li class="ammo-item">
-        <div>
-          <h3 class="weapon-title"></h3>
-          <p class="weapon-status"></p>
-        </div>
-        <div class="controls">
-          <button class="ammo-change" data-action="-5" type="button">-5</button>
-          <button class="ammo-change" data-action="-1" type="button">-1</button>
-          <button class="ammo-change" data-action="+1" type="button">+1</button>
-          <button class="ammo-change" data-action="+5" type="button">+5</button>
-          <button class="secondary ammo-reset" type="button">Reload</button>
-          <button class="danger ammo-remove" type="button">Remove</button>
-        </div>
-      </li>
     </template>
 
     <script src="script.js"></script>

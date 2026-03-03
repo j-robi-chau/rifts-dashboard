@@ -1,157 +1,185 @@
-:root {
-  color-scheme: dark;
-  --bg: #0b1020;
-  --card: #151d34;
-  --card-alt: #1d2947;
-  --text: #eff4ff;
-  --muted: #abc0ea;
-  --accent: #67e8f9;
-  --danger: #fb7185;
-}
+const STAT_TYPES = ["PPE", "MDC", "SDC", "HP", "Ammunition"];
 
-* {
-  box-sizing: border-box;
-}
+const resourceForm = document.querySelector("#resource-form");
+const resourceTypeSelect = document.querySelector("#resource-type");
+const resourceLabelInput = document.querySelector("#resource-label");
+const resourceMaxInput = document.querySelector("#resource-max");
+const statSections = document.querySelector("#stat-sections");
+const actionLogOutput = document.querySelector("#action-log-output");
+const encounterNotes = document.querySelector("#session-notes");
+const clearLogButton = document.querySelector("#clear-log");
+const clearNotesButton = document.querySelector("#clear-notes");
 
-body {
-  margin: 0;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: radial-gradient(circle at top, #1b2f63 0%, var(--bg) 40%);
-  color: var(--text);
-}
+const statGroupTemplate = document.querySelector("#stat-group-template");
+const resourceTemplate = document.querySelector("#resource-template");
 
-.dashboard {
-  width: min(1100px, 100% - 2rem);
-  margin: 2rem auto 3rem;
-  display: grid;
-  gap: 1rem;
-}
+const logs = [];
+const groupGrids = new Map();
 
-header p {
-  margin-top: 0;
-  color: var(--muted);
-}
+const asNumber = (value) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
 
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1rem;
-}
+const timestamp = () => new Date().toLocaleTimeString();
 
-.card {
-  background: linear-gradient(160deg, var(--card), var(--card-alt));
-  border: 1px solid #2c3d66;
-  border-radius: 14px;
-  padding: 1rem;
-}
+const toColloquial = ({ type, title, delta, reason, current, max }) => {
+  const changeWord = delta < 0 ? "lost" : "gained";
+  const amount = Math.abs(delta);
+  const because = reason ? ` after ${reason}` : "";
+  return `${type} ${title} ${changeWord} ${amount}${because}. It is now ${current}/${max}.`;
+};
 
-.stat-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-}
+const pushLog = (entry) => {
+  logs.unshift(entry);
+  actionLogOutput.value = logs.join("\n");
+};
 
-.stat-source {
-  margin: 0.2rem 0 0.5rem;
-  color: var(--muted);
-  font-size: 0.95rem;
-}
+const logAdjustment = ({ type, title, delta, reason, current, max }) => {
+  const sign = delta > 0 ? "+" : "";
+  const because = reason ? ` | Reason: ${reason}` : "";
+  const line = `[${timestamp()}] ${type} • ${title}: ${sign}${delta} => ${current}/${max}${because}`;
+  pushLog(line);
+  encounterNotes.value += `${encounterNotes.value ? "\n" : ""}${toColloquial({
+    type,
+    title,
+    delta,
+    reason,
+    current,
+    max,
+  })}`;
+};
 
-.stat-current {
-  font-size: 1.2rem;
-  color: var(--accent);
-}
+const createResourceCard = ({ type, label = "Base", max = 50, current = max }) => {
+  const fragment = resourceTemplate.content.cloneNode(true);
+  const card = fragment.querySelector(".stat-card");
+  const titleInput = fragment.querySelector(".section-title");
+  const currentOutput = fragment.querySelector(".stat-current");
+  const maxInput = fragment.querySelector(".max-input");
+  const removeButton = fragment.querySelector(".remove-resource");
+  const resetButton = fragment.querySelector(".reset");
+  const changeButtons = fragment.querySelectorAll(".change");
 
-.controls {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
+  titleInput.value = label;
+  maxInput.value = max;
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
+  const updateCurrentText = () => {
+    const statMax = Math.max(0, asNumber(maxInput.value));
+    maxInput.value = statMax;
+    current = Math.min(Math.max(0, current), statMax);
+    currentOutput.textContent = `${type}: ${current}/${statMax}`;
+  };
 
-button {
-  border: 0;
-  border-radius: 9px;
-  padding: 0.45rem 0.75rem;
-  cursor: pointer;
-  background: #2563eb;
-  color: white;
-}
+  maxInput.addEventListener("input", updateCurrentText);
 
-button.secondary {
-  background: #3b4d72;
-}
+  changeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const delta = asNumber(button.dataset.action);
+      const notePrompt = window.prompt(
+        `Why did ${type} ${titleInput.value} change by ${delta}?`,
+        ""
+      );
 
-button.danger {
-  background: #be123c;
-}
+      if (notePrompt === null) {
+        return;
+      }
 
-.meta {
-  margin-top: 0.75rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-}
+      const statMax = Math.max(0, asNumber(maxInput.value));
+      current = Math.min(Math.max(0, current + delta), statMax);
+      updateCurrentText();
 
-input,
-textarea,
-select {
-  width: 100%;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 0.45rem 0.55rem;
-  color: var(--text);
-}
+      logAdjustment({
+        type,
+        title: titleInput.value.trim() || "Untitled",
+        delta,
+        reason: notePrompt.trim(),
+        current,
+        max: statMax,
+      });
+    });
+  });
 
-label {
-  display: grid;
-  gap: 0.2rem;
-  color: var(--muted);
-}
+  resetButton.addEventListener("click", () => {
+    const statMax = Math.max(0, asNumber(maxInput.value));
+    current = statMax;
+    updateCurrentText();
+    logAdjustment({
+      type,
+      title: titleInput.value.trim() || "Untitled",
+      delta: 0,
+      reason: "reset to max",
+      current,
+      max: statMax,
+    });
+  });
 
-.resource-form,
-.ammo-form {
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  align-items: end;
-}
+  removeButton.addEventListener("click", () => {
+    card.remove();
+    pushLog(`[${timestamp()}] ${type} • ${titleInput.value || "Untitled"}: removed section.`);
+  });
 
-.ammo-list {
-  list-style: none;
-  padding: 0;
-  margin: 0.75rem 0 0;
-  display: grid;
-  gap: 0.6rem;
-}
+  updateCurrentText();
+  return fragment;
+};
 
-.ammo-item {
-  border: 1px solid #334155;
-  border-radius: 10px;
-  padding: 0.75rem;
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.action-log-card textarea,
-.notes-card textarea {
-  margin: 0.5rem 0;
-}
-
-@media (max-width: 680px) {
-  .ammo-item,
-  .meta {
-    flex-direction: column;
-    align-items: stretch;
+const addSection = (type, options = {}) => {
+  const grid = groupGrids.get(type);
+  if (!grid) {
+    return;
   }
-}
+
+  const card = createResourceCard({ type, ...options });
+  grid.append(card);
+};
+
+const createStatGroups = () => {
+  STAT_TYPES.forEach((type) => {
+    const fragment = statGroupTemplate.content.cloneNode(true);
+    const group = fragment.querySelector(".stat-group");
+    const title = fragment.querySelector(".group-title");
+    const addSectionButton = fragment.querySelector(".add-section");
+    const groupGrid = fragment.querySelector(".group-grid");
+
+    title.textContent = type;
+    addSectionButton.addEventListener("click", () => {
+      addSection(type, { label: `${type} Section`, max: 50, current: 50 });
+    });
+
+    group.dataset.type = type;
+    groupGrids.set(type, groupGrid);
+    statSections.append(fragment);
+
+    addSection(type, { label: "Base", max: 50, current: 50 });
+  });
+};
+
+resourceForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+
+  const type = resourceTypeSelect.value;
+  const label = resourceLabelInput.value.trim() || `${type} Section`;
+  const max = Math.max(0, asNumber(resourceMaxInput.value));
+
+  addSection(type, { label, max, current: max });
+  pushLog(`[${timestamp()}] ${type} • ${label}: added section (${max}/${max}).`);
+
+  resourceLabelInput.value = "";
+});
+
+clearLogButton.addEventListener("click", () => {
+  logs.length = 0;
+  actionLogOutput.value = "";
+});
+
+clearNotesButton.addEventListener("click", () => {
+  encounterNotes.value = "";
+});
+
+STAT_TYPES.forEach((type) => {
+  const option = document.createElement("option");
+  option.value = type;
+  option.textContent = type;
+  resourceTypeSelect.append(option);
+});
+
+createStatGroups();
