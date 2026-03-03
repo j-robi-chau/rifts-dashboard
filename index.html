@@ -3,112 +3,162 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RIFTS Combat Resource Dashboard</title>
+    <title>RIFTS Character + Party Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="dashboard">
-      <header>
-        <h1>RIFTS Resource Dashboard</h1>
-        <p>Track core combat resources in real time during sessions.</p>
+    <main class="app">
+      <header class="topbar card">
+        <div>
+          <h1>RIFTS Character + Party Dashboard</h1>
+          <p>Track party resources, quick stat changes, and session history in one place.</p>
+        </div>
+        <div class="topbar-actions" aria-label="Data controls">
+          <button id="export-data" type="button">Export JSON</button>
+          <button id="import-trigger" type="button" class="secondary">Import JSON</button>
+          <input id="import-file" type="file" accept="application/json" hidden />
+          <button id="reset-data" type="button" class="danger">Reset Data</button>
+        </div>
       </header>
 
-      <section class="card add-resource-card">
-        <h2>Add Stat Block</h2>
-        <form id="resource-form" class="resource-form">
-          <label>
-            Stat type
-            <select id="resource-type">
-              <option value="PPE">PPE</option>
-              <option value="MDC">MDC</option>
-              <option value="SDC">SDC</option>
-              <option value="ISP">ISP</option>
-              <option value="HP">HP</option>
-            </select>
-          </label>
-          <label>
-            Block label
-            <input type="text" id="resource-label" placeholder="e.g. Energy Shield" />
-          </label>
-          <label>
-            Source
-            <input type="text" id="resource-source" placeholder="e.g. Armor of Ithan spell" />
-          </label>
-          <label>
-            Max value
-            <input type="number" id="resource-max" min="0" value="50" />
-          </label>
-          <button type="submit">+ Add Block</button>
-        </form>
+      <section class="layout">
+        <aside class="party-panel card" aria-label="Party dashboard">
+          <h2>Party</h2>
+          <form id="add-character-form" class="stack-form">
+            <label>
+              Character name
+              <input id="new-character-name" type="text" required placeholder="e.g. Splugorth Bane" />
+            </label>
+            <button type="submit">+ Add Character</button>
+          </form>
+          <ul id="party-list" class="party-list" aria-live="polite"></ul>
+        </aside>
+
+        <section class="detail-panel card" aria-label="Character detail view">
+          <div id="empty-detail" class="empty-state">
+            <h2>Select a character</h2>
+            <p>Use the party list to open a character card and begin tracking stats.</p>
+          </div>
+
+          <div id="character-detail" hidden>
+            <div class="detail-header">
+              <label>
+                Character name
+                <input id="detail-name" type="text" />
+              </label>
+              <div class="detail-actions">
+                <button id="edit-base-stats" type="button" class="secondary">Edit Base Stats</button>
+                <button id="delete-character" type="button" class="danger">Delete Character</button>
+              </div>
+            </div>
+
+            <h3>Core Stats</h3>
+            <div id="stats-grid" class="stats-grid"></div>
+
+            <h3>Notes</h3>
+            <label>
+              Character notes
+              <textarea id="character-notes" rows="5" placeholder="Freeform notes for this character..."></textarea>
+            </label>
+
+            <h3>Ammo Tracker (Optional)</h3>
+            <form id="add-ammo-form" class="ammo-form">
+              <label>
+                Weapon name
+                <input id="ammo-weapon" type="text" required placeholder="e.g. C-27 Pulse Rifle" />
+              </label>
+              <label>
+                Max rounds
+                <input id="ammo-max" type="number" min="1" value="20" required />
+              </label>
+              <button type="submit">+ Add Weapon</button>
+            </form>
+            <ul id="ammo-list" class="ammo-list" aria-live="polite"></ul>
+
+            <h3>Character History</h3>
+            <ul id="character-history" class="history-list"></ul>
+          </div>
+        </section>
       </section>
 
-      <section class="card-grid" id="resource-grid"></section>
-
-      <section class="card action-log-card">
-        <h2>Action Log</h2>
-        <textarea
-          id="action-log-output"
-          rows="8"
-          placeholder="Action log entries appear here and are editable before moving to Encounter Notes."
-        ></textarea>
-        <div class="controls">
-          <button id="append-log-to-notes" type="button">Append Log to Encounter Notes</button>
-          <button id="clear-log" class="secondary" type="button">Clear Log</button>
-        </div>
-      </section>
-
-      <section class="card ammo-card">
-        <h2>Ammunition Tracker</h2>
-        <form id="ammo-form" class="ammo-form">
-          <label>
-            Weapon name
-            <input type="text" id="weapon-name" required placeholder="e.g. C-27 Pulse Rifle" />
-          </label>
-          <label>
-            Max rounds
-            <input type="number" id="weapon-max" required min="1" value="20" />
-          </label>
-          <button type="submit">Add Weapon</button>
-        </form>
-
-        <ul id="ammo-list" class="ammo-list"></ul>
-      </section>
-
-      <section class="card notes-card">
-        <h2>Encounter Notes</h2>
-        <textarea
-          id="session-notes"
-          placeholder="Track spell expenditures, conditions, targets, and tactical notes..."
-          rows="8"
-        ></textarea>
-        <button id="clear-notes" class="secondary" type="button">Clear Notes</button>
+      <section class="card history-panel" aria-label="Party-wide session history">
+        <h2>Party-wide History</h2>
+        <ul id="global-history" class="history-list"></ul>
       </section>
     </main>
 
-    <template id="resource-template">
-      <article class="card stat-card">
-        <div class="stat-heading">
-          <h2 class="stat-title"></h2>
-          <button class="danger remove-resource" type="button" title="Delete this block">-</button>
-        </div>
-        <p class="stat-source"></p>
-        <p class="stat-current"></p>
-        <div class="controls">
-          <button class="change" data-action="-10" type="button">-10</button>
-          <button class="change" data-action="-1" type="button">-1</button>
-          <button class="change" data-action="+1" type="button">+1</button>
-          <button class="change" data-action="+10" type="button">+10</button>
-        </div>
+    <dialog id="log-dialog">
+      <form method="dialog" id="log-dialog-form">
+        <h2>Log Entry</h2>
+        <p id="log-dialog-context"></p>
         <label>
-          Adjustment note
-          <input class="adjust-note" type="text" placeholder="e.g. Hit by a punch" />
+          Why did this change happen?
+          <input id="log-reason" type="text" maxlength="120" placeholder="e.g. cast Armor of Ithan" required />
         </label>
-        <div class="meta">
+        <menu>
+          <button value="cancel" type="submit" class="secondary">Cancel</button>
+          <button value="confirm" type="submit">Save Change</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="base-stats-dialog">
+      <form method="dialog" id="base-stats-form" class="stack-form">
+        <h2>Edit Base Stats</h2>
+        <label>
+          Base PPE
+          <input id="base-ppe" type="number" min="0" required />
+        </label>
+        <label>
+          Base SDC
+          <input id="base-sdc" type="number" min="0" required />
+        </label>
+        <label>
+          Base MDC
+          <input id="base-mdc" type="number" min="0" required />
+        </label>
+        <label>
+          Base Attacks per melee
+          <input id="base-attacks" type="number" min="0" required />
+        </label>
+        <label class="checkbox-label">
+          <input id="apply-base-to-current" type="checkbox" />
+          Also set current stats to these new base values
+        </label>
+        <menu>
+          <button value="cancel" type="submit" class="secondary">Cancel</button>
+          <button value="confirm" type="submit">Save Base Stats</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <template id="party-item-template">
+      <li class="party-item">
+        <div>
+          <button type="button" class="link-button open-character"></button>
+          <p class="party-meta"></p>
+        </div>
+      </li>
+    </template>
+
+    <template id="stat-row-template">
+      <article class="stat-row">
+        <h4 class="stat-label"></h4>
+        <p class="stat-value"></p>
+        <div class="quick-controls">
+          <button type="button" data-delta="-5">-5</button>
+          <button type="button" data-delta="-1">-1</button>
+          <button type="button" data-delta="1">+1</button>
+          <button type="button" data-delta="5">+5</button>
+          <button type="button" class="secondary reset-to-base">Reset</button>
+        </div>
+        <div class="custom-controls">
           <label>
-            Max
-            <input class="max-input" type="number" min="0" />
+            Amount
+            <input class="mod-input" type="number" min="1" value="1" />
           </label>
-          <button class="secondary reset" type="button">Reset</button>
+          <button type="button" data-custom-action="subtract" class="secondary">-</button>
+          <button type="button" data-custom-action="add">+</button>
         </div>
       </article>
     </template>
@@ -116,17 +166,31 @@
     <template id="ammo-item-template">
       <li class="ammo-item">
         <div>
-          <h3 class="weapon-title"></h3>
-          <p class="weapon-status"></p>
+          <strong class="weapon-name"></strong>
+          <p class="weapon-value"></p>
         </div>
-        <div class="controls">
-          <button class="ammo-change" data-action="-5" type="button">-5</button>
-          <button class="ammo-change" data-action="-1" type="button">-1</button>
-          <button class="ammo-change" data-action="+1" type="button">+1</button>
-          <button class="ammo-change" data-action="+5" type="button">+5</button>
-          <button class="secondary ammo-reset" type="button">Reload</button>
-          <button class="danger ammo-remove" type="button">Remove</button>
+        <div class="quick-controls">
+          <button type="button" data-delta="-5">-5</button>
+          <button type="button" data-delta="-1">-1</button>
+          <button type="button" data-delta="1">+1</button>
+          <button type="button" data-delta="5">+5</button>
+          <button type="button" class="secondary reload">Reload</button>
+          <button type="button" class="danger remove-ammo">Remove</button>
         </div>
+        <div class="custom-controls">
+          <label>
+            Amount
+            <input class="mod-input" type="number" min="1" value="1" />
+          </label>
+          <button type="button" data-custom-action="subtract" class="secondary">-</button>
+          <button type="button" data-custom-action="add">+</button>
+        </div>
+      </li>
+    </template>
+
+    <template id="history-item-template">
+      <li>
+        <p class="history-line"></p>
       </li>
     </template>
 
