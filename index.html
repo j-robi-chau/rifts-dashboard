@@ -46,11 +46,20 @@
                 Character name
                 <input id="detail-name" type="text" />
               </label>
-              <button id="delete-character" type="button" class="danger">Delete Character</button>
+              <div class="detail-actions">
+                <button id="edit-base-stats" type="button" class="secondary">Edit Base Stats</button>
+                <button id="delete-character" type="button" class="danger">Delete Character</button>
+              </div>
             </div>
 
             <h3>Core Stats</h3>
             <div id="stats-grid" class="stats-grid"></div>
+
+            <h3>Notes</h3>
+            <label>
+              Character notes
+              <textarea id="character-notes" rows="5" placeholder="Freeform notes for this character..."></textarea>
+            </label>
 
             <h3>Ammo Tracker (Optional)</h3>
             <form id="add-ammo-form" class="ammo-form">
@@ -93,6 +102,36 @@
       </form>
     </dialog>
 
+    <dialog id="base-stats-dialog">
+      <form method="dialog" id="base-stats-form" class="stack-form">
+        <h2>Edit Base Stats</h2>
+        <label>
+          Base PPE
+          <input id="base-ppe" type="number" min="0" required />
+        </label>
+        <label>
+          Base SDC
+          <input id="base-sdc" type="number" min="0" required />
+        </label>
+        <label>
+          Base MDC
+          <input id="base-mdc" type="number" min="0" required />
+        </label>
+        <label>
+          Base Attacks per melee
+          <input id="base-attacks" type="number" min="0" required />
+        </label>
+        <label class="checkbox-label">
+          <input id="apply-base-to-current" type="checkbox" />
+          Also set current stats to these new base values
+        </label>
+        <menu>
+          <button value="cancel" type="submit" class="secondary">Cancel</button>
+          <button value="confirm" type="submit">Save Base Stats</button>
+        </menu>
+      </form>
+    </dialog>
+
     <template id="party-item-template">
       <li class="party-item">
         <div>
@@ -111,14 +150,15 @@
           <button type="button" data-delta="-1">-1</button>
           <button type="button" data-delta="1">+1</button>
           <button type="button" data-delta="5">+5</button>
+          <button type="button" class="secondary reset-to-base">Reset</button>
         </div>
         <div class="custom-controls">
           <label>
-            Custom amount
+            Amount
             <input class="mod-input" type="number" min="1" value="1" />
           </label>
-          <button type="button" data-custom-action="subtract" class="secondary">- Amount</button>
-          <button type="button" data-custom-action="add">+ Amount</button>
+          <button type="button" data-custom-action="subtract" class="secondary">-</button>
+          <button type="button" data-custom-action="add">+</button>
         </div>
       </article>
     </template>
@@ -139,11 +179,11 @@
         </div>
         <div class="custom-controls">
           <label>
-            Custom amount
+            Amount
             <input class="mod-input" type="number" min="1" value="1" />
           </label>
-          <button type="button" data-custom-action="subtract" class="secondary">- Amount</button>
-          <button type="button" data-custom-action="add">+ Amount</button>
+          <button type="button" data-custom-action="subtract" class="secondary">-</button>
+          <button type="button" data-custom-action="add">+</button>
         </div>
       </li>
     </template>
