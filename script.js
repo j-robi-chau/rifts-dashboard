@@ -1,11 +1,21 @@
 const STORAGE_KEY = "rifts_dashboard_v1";
+const DEFAULT_EMPTY_NOTE = "(no note)";
 
 const defaultStats = () => ({
   ppe: 50,
   sdc: 30,
   mdc: 20,
+  hp: 0,
   attacks: 4,
 });
+
+const CORE_STAT_CONFIG = [
+  { key: "ppe", label: "PPE", requiresReason: true },
+  { key: "sdc", label: "SDC", requiresReason: true },
+  { key: "mdc", label: "MDC", requiresReason: true },
+  { key: "hp", label: "HP", requiresReason: true },
+  { key: "attacks", label: "Attacks per Melee", requiresReason: false },
+];
 
 const state = loadState();
 
@@ -16,6 +26,7 @@ const emptyDetail = document.querySelector("#empty-detail");
 const detailPanel = document.querySelector("#character-detail");
 const detailNameInput = document.querySelector("#detail-name");
 const editBaseStatsButton = document.querySelector("#edit-base-stats");
+const addStatBlockButton = document.querySelector("#add-stat-block");
 const deleteCharacterButton = document.querySelector("#delete-character");
 const statsGrid = document.querySelector("#stats-grid");
 const characterNotes = document.querySelector("#character-notes");
@@ -40,13 +51,13 @@ const baseStatsForm = document.querySelector("#base-stats-form");
 const basePpeInput = document.querySelector("#base-ppe");
 const baseSdcInput = document.querySelector("#base-sdc");
 const baseMdcInput = document.querySelector("#base-mdc");
+const baseHpInput = document.querySelector("#base-hp");
 const baseAttacksInput = document.querySelector("#base-attacks");
 const applyBaseToCurrentInput = document.querySelector("#apply-base-to-current");
 
 const partyItemTemplate = document.querySelector("#party-item-template");
 const statRowTemplate = document.querySelector("#stat-row-template");
 const ammoItemTemplate = document.querySelector("#ammo-item-template");
-const historyItemTemplate = document.querySelector("#history-item-template");
 
 let pendingChange = null;
 
@@ -79,6 +90,11 @@ function normalizeStatValue(value, fallback) {
   return Math.max(0, fallback);
 }
 
+function normalizeReason(reason) {
+  const trimmed = (reason || "").trim();
+  return trimmed || DEFAULT_EMPTY_NOTE;
+}
+
 function buildBaseStats(character, defaults) {
   const currentStats = character.stats || defaults;
   const existingBase = character.baseStats || {};
@@ -87,7 +103,24 @@ function buildBaseStats(character, defaults) {
     ppe: normalizeStatValue(existingBase.ppe, normalizeStatValue(currentStats.ppe, defaults.ppe)),
     sdc: normalizeStatValue(existingBase.sdc, normalizeStatValue(currentStats.sdc, defaults.sdc)),
     mdc: normalizeStatValue(existingBase.mdc, normalizeStatValue(currentStats.mdc, defaults.mdc)),
+    hp: normalizeStatValue(existingBase.hp, normalizeStatValue(currentStats.hp, 0)),
     attacks: normalizeStatValue(existingBase.attacks, normalizeStatValue(currentStats.attacks, defaults.attacks)),
+  };
+}
+
+function normalizeCustomStat(entry, index, defaults) {
+  const id = entry.id || uid();
+  const type = (entry.type || "Stat").toString().trim() || "Stat";
+  const label = (entry.label || type || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
+  const base = normalizeStatValue(entry.base, normalizeStatValue(entry.current, defaults.hp));
+  const current = normalizeStatValue(entry.current, base);
+
+  return {
+    id,
+    type,
+    label,
+    current,
+    base,
   };
 }
 
@@ -100,10 +133,17 @@ function sanitizeForDisplay(stateToFix) {
       ppe: normalizeStatValue(character.stats.ppe, defaults.ppe),
       sdc: normalizeStatValue(character.stats.sdc, defaults.sdc),
       mdc: normalizeStatValue(character.stats.mdc, defaults.mdc),
+      hp: normalizeStatValue(character.stats.hp, normalizeStatValue(character.stats.hp, 0)),
       attacks: normalizeStatValue(character.stats.attacks, defaults.attacks),
     };
 
     character.baseStats = buildBaseStats(character, defaults);
+
+    if (!Array.isArray(character.customStats)) {
+      character.customStats = [];
+    }
+    character.customStats = character.customStats.map((entry, index) => normalizeCustomStat(entry, index, defaults));
+
     character.notes = typeof character.notes === "string" ? character.notes : "";
 
     if (!Array.isArray(character.ammo)) {
@@ -118,6 +158,13 @@ function sanitizeForDisplay(stateToFix) {
     if (!Array.isArray(character.history)) {
       character.history = [];
     }
+    character.history.forEach((entry) => {
+      entry.reason = normalizeReason(entry.reason);
+    });
+  });
+
+  stateToFix.history.forEach((entry) => {
+    entry.reason = normalizeReason(entry.reason);
   });
 }
 
@@ -154,10 +201,39 @@ function createCharacter(name, baseStats) {
     name,
     stats: { ...baseStats },
     baseStats: { ...baseStats },
+    customStats: [],
     notes: "",
     ammo: [],
     history: [],
   };
+}
+
+function getStatEntries(character) {
+  const coreEntries = CORE_STAT_CONFIG.map((entry) => ({
+    kind: "core",
+    key: entry.key,
+    label: entry.label,
+    requiresReason: entry.requiresReason,
+    getCurrent: () => character.stats[entry.key],
+    getBase: () => character.baseStats[entry.key],
+    setCurrent: (value) => {
+      character.stats[entry.key] = value;
+    },
+  }));
+
+  const customEntries = character.customStats.map((entry) => ({
+    kind: "custom",
+    key: entry.id,
+    label: entry.label,
+    requiresReason: true,
+    getCurrent: () => entry.current,
+    getBase: () => entry.base,
+    setCurrent: (value) => {
+      entry.current = value;
+    },
+  }));
+
+  return [...coreEntries, ...customEntries];
 }
 
 function render() {
@@ -181,7 +257,7 @@ function renderPartyList() {
       render();
     });
 
-    meta.textContent = `PPE ${character.stats.ppe} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc}`;
+    meta.textContent = `PPE ${character.stats.ppe} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc} • HP ${character.stats.hp}`;
 
     partyList.append(fragment);
   });
@@ -205,22 +281,32 @@ function renderDetail() {
   renderCharacterHistory(character);
 }
 
-function queueStatChange({ character, statKey, label, delta, context }) {
+function queueStatChange({ character, entry, delta, context }) {
+  const applyChange = (reason) => {
+    const before = entry.getCurrent();
+    const next = Math.max(0, before + delta);
+    entry.setCurrent(next);
+    const appliedDelta = next - before;
+    pushHistory(character, `${entry.label} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${next})`, reason, appliedDelta);
+  };
+
+  if (!entry.requiresReason) {
+    applyChange("");
+    return;
+  }
+
   queueChange({
     context,
     apply: (reason) => {
-      const before = character.stats[statKey];
-      character.stats[statKey] = Math.max(0, before + delta);
-      const appliedDelta = character.stats[statKey] - before;
-      pushHistory(character, `${label} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${character.stats[statKey]})`, reason, appliedDelta);
+      applyChange(reason);
     },
   });
 }
 
 function resetStatToBase(character, entry) {
-  const before = character.stats[entry.key];
-  const next = character.baseStats[entry.key];
-  character.stats[entry.key] = next;
+  const before = entry.getCurrent();
+  const next = entry.getBase();
+  entry.setCurrent(next);
   const delta = next - before;
   pushHistory(character, `${entry.label} reset to base (${next})`, "Reset to base", delta);
 }
@@ -242,15 +328,9 @@ function wireCustomAdjustment({ customAmountInput, onApply }) {
 
 function renderStats(character) {
   statsGrid.innerHTML = "";
+  const entries = getStatEntries(character);
 
-  const config = [
-    { key: "ppe", label: "PPE" },
-    { key: "sdc", label: "SDC" },
-    { key: "mdc", label: "MDC" },
-    { key: "attacks", label: "Attacks per Melee" },
-  ];
-
-  config.forEach((entry) => {
+  entries.forEach((entry) => {
     const fragment = statRowTemplate.content.cloneNode(true);
     const label = fragment.querySelector(".stat-label");
     const value = fragment.querySelector(".stat-value");
@@ -259,11 +339,11 @@ function renderStats(character) {
     const customAmountInput = fragment.querySelector(".mod-input");
 
     label.textContent = entry.label;
-    value.textContent = `${character.stats[entry.key]} (Base ${character.baseStats[entry.key]})`;
+    value.textContent = `${entry.getCurrent()} (Base ${entry.getBase()})`;
 
     quickButtons.forEach((button) => {
       const buttonDelta = asInt(button.dataset.delta, 0);
-      if (entry.key === "attacks" && Math.abs(buttonDelta) === 5) {
+      if (entry.label === "Attacks per Melee" && Math.abs(buttonDelta) === 5) {
         button.hidden = true;
         return;
       }
@@ -271,8 +351,7 @@ function renderStats(character) {
       button.addEventListener("click", () => {
         queueStatChange({
           character,
-          statKey: entry.key,
-          label: entry.label,
+          entry,
           delta: buttonDelta,
           context: `${character.name}: ${entry.label} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`,
         });
@@ -288,8 +367,7 @@ function renderStats(character) {
       onApply: (delta) => {
         queueStatChange({
           character,
-          statKey: entry.key,
-          label: entry.label,
+          entry,
           delta,
           context: `${character.name}: ${entry.label} custom ${delta >= 0 ? "+" : ""}${delta}`,
         });
@@ -379,13 +457,81 @@ function renderAmmo(character) {
   });
 }
 
+function setHistoryReason(character, entryId, reason) {
+  const updatedReason = normalizeReason(reason);
+  const characterEntry = character.history.find((entry) => entry.id === entryId);
+  if (characterEntry) {
+    characterEntry.reason = updatedReason;
+  }
+
+  const globalEntry = state.history.find((entry) => entry.id === entryId);
+  if (globalEntry) {
+    globalEntry.reason = updatedReason;
+  }
+
+  saveState();
+  renderCharacterHistory(character);
+  renderGlobalHistory();
+}
+
 function renderCharacterHistory(character) {
   characterHistory.innerHTML = "";
 
   character.history.slice(0, 50).forEach((entry) => {
-    const fragment = historyItemTemplate.content.cloneNode(true);
-    fragment.querySelector(".history-line").textContent = `[${entry.time}] ${entry.text} — ${entry.reason}`;
-    characterHistory.append(fragment);
+    const li = document.createElement("li");
+
+    const line = document.createElement("p");
+    line.className = "history-line";
+    line.textContent = `[${entry.time}] ${entry.text} — ${normalizeReason(entry.reason)}`;
+
+    const controls = document.createElement("div");
+    controls.className = "history-edit-controls";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "secondary";
+    editButton.textContent = "Edit";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "history-edit-input";
+    input.value = normalizeReason(entry.reason) === DEFAULT_EMPTY_NOTE ? "" : normalizeReason(entry.reason);
+    input.hidden = true;
+
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.textContent = "Save";
+    saveButton.hidden = true;
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "secondary";
+    cancelButton.textContent = "Cancel";
+    cancelButton.hidden = true;
+
+    editButton.addEventListener("click", () => {
+      editButton.hidden = true;
+      input.hidden = false;
+      saveButton.hidden = false;
+      cancelButton.hidden = false;
+      input.focus();
+    });
+
+    saveButton.addEventListener("click", () => {
+      setHistoryReason(character, entry.id, input.value);
+    });
+
+    cancelButton.addEventListener("click", () => {
+      input.value = normalizeReason(entry.reason) === DEFAULT_EMPTY_NOTE ? "" : normalizeReason(entry.reason);
+      input.hidden = true;
+      saveButton.hidden = true;
+      cancelButton.hidden = true;
+      editButton.hidden = false;
+    });
+
+    controls.append(editButton, input, saveButton, cancelButton);
+    li.append(line, controls);
+    characterHistory.append(li);
   });
 }
 
@@ -393,9 +539,12 @@ function renderGlobalHistory() {
   globalHistory.innerHTML = "";
 
   state.history.slice(0, 100).forEach((entry) => {
-    const fragment = historyItemTemplate.content.cloneNode(true);
-    fragment.querySelector(".history-line").textContent = `[${entry.time}] ${entry.character}: ${entry.text} — ${entry.reason}`;
-    globalHistory.append(fragment);
+    const li = document.createElement("li");
+    const line = document.createElement("p");
+    line.className = "history-line";
+    line.textContent = `[${entry.time}] ${entry.character}: ${entry.text} — ${normalizeReason(entry.reason)}`;
+    li.append(line);
+    globalHistory.append(li);
   });
 }
 
@@ -404,7 +553,7 @@ function pushHistory(character, text, reason, delta = null) {
     id: uid(),
     character: character.name,
     text,
-    reason: reason || "No reason provided",
+    reason: normalizeReason(reason),
     delta,
     time: timestamp(),
   };
@@ -433,6 +582,9 @@ function promptForBaseStats(seed = defaultStats()) {
   const mdc = window.prompt("Base MDC", `${seed.mdc}`);
   if (mdc === null) return null;
 
+  const hp = window.prompt("Base HP", `${seed.hp}`);
+  if (hp === null) return null;
+
   const attacks = window.prompt("Base Attacks per melee", `${seed.attacks}`);
   if (attacks === null) return null;
 
@@ -440,6 +592,7 @@ function promptForBaseStats(seed = defaultStats()) {
     ppe: Math.max(0, asInt(ppe, seed.ppe)),
     sdc: Math.max(0, asInt(sdc, seed.sdc)),
     mdc: Math.max(0, asInt(mdc, seed.mdc)),
+    hp: Math.max(0, asInt(hp, seed.hp)),
     attacks: Math.max(0, asInt(attacks, seed.attacks)),
   };
 }
@@ -500,9 +653,45 @@ editBaseStatsButton.addEventListener("click", () => {
   basePpeInput.value = character.baseStats.ppe;
   baseSdcInput.value = character.baseStats.sdc;
   baseMdcInput.value = character.baseStats.mdc;
+  baseHpInput.value = character.baseStats.hp;
   baseAttacksInput.value = character.baseStats.attacks;
   applyBaseToCurrentInput.checked = false;
   baseStatsDialog.showModal();
+});
+
+addStatBlockButton.addEventListener("click", () => {
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  const type = window.prompt("Stat type", "Resource");
+  if (type === null) {
+    return;
+  }
+
+  const label = window.prompt("Stat title/label", type || "Custom Stat");
+  if (label === null) {
+    return;
+  }
+
+  const base = window.prompt("Base value", "0");
+  if (base === null) {
+    return;
+  }
+
+  const baseValue = Math.max(0, asInt(base, 0));
+
+  character.customStats.push({
+    id: uid(),
+    type: (type || "Resource").trim() || "Resource",
+    label: (label || type || "Custom Stat").trim() || "Custom Stat",
+    base: baseValue,
+    current: baseValue,
+  });
+
+  saveState();
+  render();
 });
 
 baseStatsForm.addEventListener("submit", (event) => {
@@ -522,6 +711,7 @@ baseStatsForm.addEventListener("submit", (event) => {
     ppe: Math.max(0, asInt(basePpeInput.value, character.baseStats.ppe)),
     sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc)),
     mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc)),
+    hp: Math.max(0, asInt(baseHpInput.value, character.baseStats.hp)),
     attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks)),
   };
 
@@ -587,12 +777,7 @@ logDialogForm.addEventListener("submit", (event) => {
     return;
   }
 
-  const reason = logReasonInput.value.trim();
-  if (!reason) {
-    logReasonInput.focus();
-    return;
-  }
-
+  const reason = logReasonInput.value;
   pendingChange.apply(reason);
   pendingChange = null;
   logDialog.close();
@@ -661,6 +846,7 @@ resetDataButton.addEventListener("click", () => {
   state.characters = [];
   state.selectedCharacterId = null;
   state.history = [];
+  localStorage.removeItem(STORAGE_KEY);
   saveState();
   render();
 });
