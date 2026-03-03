@@ -87,11 +87,13 @@ label {
 }
 
 input,
-button {
+button,
+textarea {
   font: inherit;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   border-radius: 9px;
   border: 1px solid var(--line);
@@ -119,6 +121,7 @@ button.danger {
 
 button:focus-visible,
 input:focus-visible,
+textarea:focus-visible,
 .link-button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -167,6 +170,12 @@ input:focus-visible,
   align-items: end;
 }
 
+.detail-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .stats-grid {
   display: grid;
   gap: 0.65rem;
@@ -196,6 +205,16 @@ input:focus-visible,
 
 .custom-controls label {
   margin: 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox-label input {
+  width: auto;
 }
 
 .empty-state p {

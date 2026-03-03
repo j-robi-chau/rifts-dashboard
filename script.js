@@ -15,8 +15,10 @@ const partyList = document.querySelector("#party-list");
 const emptyDetail = document.querySelector("#empty-detail");
 const detailPanel = document.querySelector("#character-detail");
 const detailNameInput = document.querySelector("#detail-name");
+const editBaseStatsButton = document.querySelector("#edit-base-stats");
 const deleteCharacterButton = document.querySelector("#delete-character");
 const statsGrid = document.querySelector("#stats-grid");
+const characterNotes = document.querySelector("#character-notes");
 const ammoList = document.querySelector("#ammo-list");
 const addAmmoForm = document.querySelector("#add-ammo-form");
 const ammoWeaponInput = document.querySelector("#ammo-weapon");
@@ -32,6 +34,14 @@ const logDialog = document.querySelector("#log-dialog");
 const logDialogForm = document.querySelector("#log-dialog-form");
 const logDialogContext = document.querySelector("#log-dialog-context");
 const logReasonInput = document.querySelector("#log-reason");
+
+const baseStatsDialog = document.querySelector("#base-stats-dialog");
+const baseStatsForm = document.querySelector("#base-stats-form");
+const basePpeInput = document.querySelector("#base-ppe");
+const baseSdcInput = document.querySelector("#base-sdc");
+const baseMdcInput = document.querySelector("#base-mdc");
+const baseAttacksInput = document.querySelector("#base-attacks");
+const applyBaseToCurrentInput = document.querySelector("#apply-base-to-current");
 
 const partyItemTemplate = document.querySelector("#party-item-template");
 const statRowTemplate = document.querySelector("#stat-row-template");
@@ -69,6 +79,18 @@ function normalizeStatValue(value, fallback) {
   return Math.max(0, fallback);
 }
 
+function buildBaseStats(character, defaults) {
+  const currentStats = character.stats || defaults;
+  const existingBase = character.baseStats || {};
+
+  return {
+    ppe: normalizeStatValue(existingBase.ppe, normalizeStatValue(currentStats.ppe, defaults.ppe)),
+    sdc: normalizeStatValue(existingBase.sdc, normalizeStatValue(currentStats.sdc, defaults.sdc)),
+    mdc: normalizeStatValue(existingBase.mdc, normalizeStatValue(currentStats.mdc, defaults.mdc)),
+    attacks: normalizeStatValue(existingBase.attacks, normalizeStatValue(currentStats.attacks, defaults.attacks)),
+  };
+}
+
 function sanitizeForDisplay(stateToFix) {
   stateToFix.characters.forEach((character) => {
     const defaults = defaultStats();
@@ -80,6 +102,9 @@ function sanitizeForDisplay(stateToFix) {
       mdc: normalizeStatValue(character.stats.mdc, defaults.mdc),
       attacks: normalizeStatValue(character.stats.attacks, defaults.attacks),
     };
+
+    character.baseStats = buildBaseStats(character, defaults);
+    character.notes = typeof character.notes === "string" ? character.notes : "";
 
     if (!Array.isArray(character.ammo)) {
       character.ammo = [];
@@ -123,11 +148,13 @@ function selectedCharacter() {
   return state.characters.find((character) => character.id === state.selectedCharacterId) || null;
 }
 
-function createCharacter(name) {
+function createCharacter(name, baseStats) {
   return {
     id: uid(),
     name,
-    stats: defaultStats(),
+    stats: { ...baseStats },
+    baseStats: { ...baseStats },
+    notes: "",
     ammo: [],
     history: [],
   };
@@ -172,6 +199,7 @@ function renderDetail() {
   detailPanel.hidden = false;
 
   detailNameInput.value = character.name;
+  characterNotes.value = character.notes;
   renderStats(character);
   renderAmmo(character);
   renderCharacterHistory(character);
@@ -187,6 +215,14 @@ function queueStatChange({ character, statKey, label, delta, context }) {
       pushHistory(character, `${label} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${character.stats[statKey]})`, reason, appliedDelta);
     },
   });
+}
+
+function resetStatToBase(character, entry) {
+  const before = character.stats[entry.key];
+  const next = character.baseStats[entry.key];
+  character.stats[entry.key] = next;
+  const delta = next - before;
+  pushHistory(character, `${entry.label} reset to base (${next})`, "Reset to base", delta);
 }
 
 function wireCustomAdjustment({ customAmountInput, onApply }) {
@@ -219,10 +255,11 @@ function renderStats(character) {
     const label = fragment.querySelector(".stat-label");
     const value = fragment.querySelector(".stat-value");
     const quickButtons = fragment.querySelectorAll(".quick-controls button[data-delta]");
+    const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
 
     label.textContent = entry.label;
-    value.textContent = `${character.stats[entry.key]}`;
+    value.textContent = `${character.stats[entry.key]} (Base ${character.baseStats[entry.key]})`;
 
     quickButtons.forEach((button) => {
       const buttonDelta = asInt(button.dataset.delta, 0);
@@ -240,6 +277,10 @@ function renderStats(character) {
           context: `${character.name}: ${entry.label} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`,
         });
       });
+    });
+
+    resetButton.addEventListener("click", () => {
+      resetStatToBase(character, entry);
     });
 
     wireCustomAdjustment({
@@ -382,6 +423,27 @@ function queueChange(change) {
   logReasonInput.focus();
 }
 
+function promptForBaseStats(seed = defaultStats()) {
+  const ppe = window.prompt("Base PPE", `${seed.ppe}`);
+  if (ppe === null) return null;
+
+  const sdc = window.prompt("Base SDC", `${seed.sdc}`);
+  if (sdc === null) return null;
+
+  const mdc = window.prompt("Base MDC", `${seed.mdc}`);
+  if (mdc === null) return null;
+
+  const attacks = window.prompt("Base Attacks per melee", `${seed.attacks}`);
+  if (attacks === null) return null;
+
+  return {
+    ppe: Math.max(0, asInt(ppe, seed.ppe)),
+    sdc: Math.max(0, asInt(sdc, seed.sdc)),
+    mdc: Math.max(0, asInt(mdc, seed.mdc)),
+    attacks: Math.max(0, asInt(attacks, seed.attacks)),
+  };
+}
+
 addCharacterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const name = newCharacterNameInput.value.trim();
@@ -389,7 +451,12 @@ addCharacterForm.addEventListener("submit", (event) => {
     return;
   }
 
-  const character = createCharacter(name);
+  const baseStats = promptForBaseStats();
+  if (!baseStats) {
+    return;
+  }
+
+  const character = createCharacter(name, baseStats);
   state.characters.push(character);
   state.selectedCharacterId = character.id;
   saveState();
@@ -412,6 +479,61 @@ detailNameInput.addEventListener("change", () => {
   character.name = nextName;
   saveState();
   render();
+});
+
+characterNotes.addEventListener("input", () => {
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  character.notes = characterNotes.value;
+  saveState();
+});
+
+editBaseStatsButton.addEventListener("click", () => {
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  basePpeInput.value = character.baseStats.ppe;
+  baseSdcInput.value = character.baseStats.sdc;
+  baseMdcInput.value = character.baseStats.mdc;
+  baseAttacksInput.value = character.baseStats.attacks;
+  applyBaseToCurrentInput.checked = false;
+  baseStatsDialog.showModal();
+});
+
+baseStatsForm.addEventListener("submit", (event) => {
+  const submitButton = event.submitter;
+  if (!submitButton || submitButton.value !== "confirm") {
+    return;
+  }
+
+  event.preventDefault();
+  const character = selectedCharacter();
+  if (!character) {
+    baseStatsDialog.close();
+    return;
+  }
+
+  const nextBase = {
+    ppe: Math.max(0, asInt(basePpeInput.value, character.baseStats.ppe)),
+    sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc)),
+    mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc)),
+    attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks)),
+  };
+
+  character.baseStats = nextBase;
+
+  if (applyBaseToCurrentInput.checked) {
+    character.stats = { ...nextBase };
+  }
+
+  saveState();
+  render();
+  baseStatsDialog.close();
 });
 
 deleteCharacterButton.addEventListener("click", () => {
