@@ -1,22 +1,13 @@
 const STORAGE_KEY = "rifts_dashboard_v1";
 const DEFAULT_EMPTY_NOTE = "(no note)";
 
-const defaultStats = () => ({
-  ppe: 50,
-  sdc: 30,
-  mdc: 20,
-  hp: 0,
-  isp: 0,
-  attacks: 4,
-});
-
-const CORE_STAT_CONFIG = [
-  { key: "ppe", label: "PPE", requiresReason: true, deletable: false },
-  { key: "sdc", label: "SDC", requiresReason: true, deletable: false },
-  { key: "mdc", label: "MDC", requiresReason: true, deletable: false },
-  { key: "hp", label: "HP", requiresReason: true, deletable: false },
-  { key: "isp", label: "ISP", requiresReason: true, deletable: false },
-  { key: "attacks", label: "Attacks per Melee", requiresReason: false, deletable: false },
+const CORE_STATS = [
+  { key: "PPE", title: "PPE", baseFallback: 50, loggable: true },
+  { key: "SDC", title: "SDC", baseFallback: 30, loggable: true },
+  { key: "MDC", title: "MDC", baseFallback: 20, loggable: true },
+  { key: "HP", title: "HP", baseFallback: 0, loggable: true },
+  { key: "ISP", title: "ISP", baseFallback: 0, loggable: true },
+  { key: "APM", title: "Attacks per Melee", baseFallback: 4, loggable: false },
 ];
 
 const state = loadState();
@@ -77,20 +68,8 @@ function clamp(value, min, max) {
 }
 
 function asInt(value, fallback = 0) {
-  const number = Number.parseInt(value, 10);
-  return Number.isNaN(number) ? fallback : number;
-}
-
-function normalizeStatValue(value, fallback) {
-  if (typeof value === "number") {
-    return Math.max(0, asInt(value, fallback));
-  }
-
-  if (value && typeof value === "object") {
-    return Math.max(0, asInt(value.current, fallback));
-  }
-
-  return Math.max(0, fallback);
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
 }
 
 function normalizeReason(reason) {
@@ -98,125 +77,196 @@ function normalizeReason(reason) {
   return trimmed || DEFAULT_EMPTY_NOTE;
 }
 
-function requiresReasonForType(type) {
-  const normalized = (type || "").trim().toUpperCase();
-  return normalized !== "APM";
+function normalizeNumber(value, fallback = 0) {
+  if (typeof value === "number") return Math.max(0, asInt(value, fallback));
+  if (value && typeof value === "object") return Math.max(0, asInt(value.current, fallback));
+  return Math.max(0, fallback);
 }
 
-function buildBaseStats(character, defaults) {
-  const currentStats = character.stats || defaults;
-  const existingBase = character.baseStats || {};
-
-  return {
-    ppe: normalizeStatValue(existingBase.ppe, normalizeStatValue(currentStats.ppe, defaults.ppe)),
-    sdc: normalizeStatValue(existingBase.sdc, normalizeStatValue(currentStats.sdc, defaults.sdc)),
-    mdc: normalizeStatValue(existingBase.mdc, normalizeStatValue(currentStats.mdc, defaults.mdc)),
-    hp: normalizeStatValue(existingBase.hp, normalizeStatValue(currentStats.hp, 0)),
-    isp: normalizeStatValue(existingBase.isp, normalizeStatValue(currentStats.isp, 0)),
-    attacks: normalizeStatValue(existingBase.attacks, normalizeStatValue(currentStats.attacks, defaults.attacks)),
-  };
+function getCoreConfigByKey(key) {
+  return CORE_STATS.find((entry) => entry.key === key);
 }
 
-function normalizeCustomStat(entry, index) {
-  const id = entry.id || uid();
-  const type = (entry.type || "CUSTOM").toString().trim().toUpperCase() || "CUSTOM";
-  const label = (entry.label || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
-  const base = normalizeStatValue(entry.base, normalizeStatValue(entry.current, 0));
-  const current = normalizeStatValue(entry.current, base);
-
+function buildCoreStat({ key, title, baseFallback, loggable }, baseSource, currentSource, collapsedSource) {
+  const current = normalizeNumber(currentSource, baseFallback);
+  const base = normalizeNumber(baseSource, current);
   return {
-    id,
-    type,
-    label,
-    current,
+    id: `core-${key.toLowerCase()}`,
+    key,
+    title,
     base,
+    current,
+    collapsed: collapsedSource === true,
+    loggable,
   };
 }
 
-function ensureCollapseState(character) {
-  if (!character.collapsedStats || typeof character.collapsedStats !== "object") {
-    character.collapsedStats = {};
+function legacyCurrentForKey(character, key) {
+  const map = {
+    PPE: ["ppe"],
+    SDC: ["sdc"],
+    MDC: ["mdc"],
+    HP: ["hp"],
+    ISP: ["isp"],
+    APM: ["attacks"],
+  };
+
+  const field = map[key]?.[0];
+  if (!field) return 0;
+
+  if (character.stats && !Array.isArray(character.stats)) {
+    return character.stats[field];
   }
 
-  CORE_STAT_CONFIG.forEach((entry) => {
-    const key = `core:${entry.key}`;
-    if (typeof character.collapsedStats[key] !== "boolean") {
-      character.collapsedStats[key] = false;
+  return 0;
+}
+
+function legacyBaseForKey(character, key) {
+  const map = {
+    PPE: ["ppe"],
+    SDC: ["sdc"],
+    MDC: ["mdc"],
+    HP: ["hp"],
+    ISP: ["isp"],
+    APM: ["attacks"],
+  };
+
+  const field = map[key]?.[0];
+  if (!field) return 0;
+
+  if (character.baseStats && !Array.isArray(character.baseStats)) {
+    return character.baseStats[field];
+  }
+
+  return legacyCurrentForKey(character, key);
+}
+
+function ensureStatsArray(character) {
+  if (Array.isArray(character.stats)) {
+    character.stats = character.stats.map((stat) => ({
+      id: stat.id || uid(),
+      key: typeof stat.key === "string" ? stat.key : "",
+      title: (stat.title || stat.label || "Stat").toString(),
+      base: normalizeNumber(stat.base, normalizeNumber(stat.current, 0)),
+      current: normalizeNumber(stat.current, normalizeNumber(stat.base, 0)),
+      collapsed: stat.collapsed === true,
+      loggable: stat.loggable !== false,
+    }));
+  } else {
+    const collapsedLegacy = character.collapsedStats && typeof character.collapsedStats === "object" ? character.collapsedStats : {};
+    const migratedCore = CORE_STATS.map((core) => {
+      const legacyCollapseKey = `core:${core.key === "APM" ? "attacks" : core.key.toLowerCase()}`;
+      return buildCoreStat(
+        core,
+        legacyBaseForKey(character, core.key),
+        legacyCurrentForKey(character, core.key),
+        collapsedLegacy[legacyCollapseKey]
+      );
+    });
+
+    const legacyCustom = Array.isArray(character.customStats)
+      ? character.customStats.map((entry, index) => {
+          const id = entry.id || uid();
+          const type = (entry.type || "CUSTOM").toString().trim().toUpperCase() || "CUSTOM";
+          const title = (entry.label || entry.title || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
+          const collapsedKey = `custom:${id}`;
+          return {
+            id,
+            key: type === "CUSTOM" ? "" : type,
+            title,
+            base: normalizeNumber(entry.base, normalizeNumber(entry.current, 0)),
+            current: normalizeNumber(entry.current, normalizeNumber(entry.base, 0)),
+            collapsed: collapsedLegacy[collapsedKey] === true || entry.collapsed === true,
+            loggable: type !== "APM",
+          };
+        })
+      : [];
+
+    character.stats = [...migratedCore, ...legacyCustom];
+  }
+
+  CORE_STATS.forEach((core) => {
+    if (!character.stats.some((stat) => stat.key === core.key)) {
+      character.stats.push(
+        buildCoreStat(
+          core,
+          legacyBaseForKey(character, core.key),
+          legacyCurrentForKey(character, core.key),
+          false
+        )
+      );
     }
   });
 
-  character.customStats.forEach((entry) => {
-    const key = `custom:${entry.id}`;
-    if (typeof character.collapsedStats[key] !== "boolean") {
-      character.collapsedStats[key] = false;
-    }
+  character.stats = character.stats.map((stat) => {
+    const core = getCoreConfigByKey(stat.key);
+    return {
+      ...stat,
+      collapsed: stat.collapsed === true,
+      loggable: core ? core.loggable : stat.loggable !== false,
+      title: core ? core.title : (stat.title || "Stat"),
+      base: normalizeNumber(stat.base, normalizeNumber(stat.current, 0)),
+      current: normalizeNumber(stat.current, normalizeNumber(stat.base, 0)),
+    };
+  });
+
+  character.stats.sort((a, b) => {
+    const aCoreIdx = CORE_STATS.findIndex((core) => core.key === a.key);
+    const bCoreIdx = CORE_STATS.findIndex((core) => core.key === b.key);
+    const aIsCore = aCoreIdx !== -1;
+    const bIsCore = bCoreIdx !== -1;
+    if (aIsCore && bIsCore) return aCoreIdx - bCoreIdx;
+    if (aIsCore) return -1;
+    if (bIsCore) return 1;
+    return 0;
   });
 }
 
 function sanitizeForDisplay(stateToFix) {
   stateToFix.characters.forEach((character) => {
-    const defaults = defaultStats();
-    character.stats ||= defaults;
-
-    character.stats = {
-      ppe: normalizeStatValue(character.stats.ppe, defaults.ppe),
-      sdc: normalizeStatValue(character.stats.sdc, defaults.sdc),
-      mdc: normalizeStatValue(character.stats.mdc, defaults.mdc),
-      hp: normalizeStatValue(character.stats.hp, 0),
-      isp: normalizeStatValue(character.stats.isp, 0),
-      attacks: normalizeStatValue(character.stats.attacks, defaults.attacks),
-    };
-
-    character.baseStats = buildBaseStats(character, defaults);
-
-    if (!Array.isArray(character.customStats)) {
-      character.customStats = [];
-    }
-    character.customStats = character.customStats.map((entry, index) => normalizeCustomStat(entry, index));
-
+    character.id ||= uid();
+    character.name = (character.name || "Unnamed").toString();
     character.notes = typeof character.notes === "string" ? character.notes : "";
+    if (!Array.isArray(character.history)) character.history = [];
+    character.history.forEach((entry) => {
+      entry.id ||= uid();
+      entry.reason = normalizeReason(entry.reason);
+      entry.time ||= timestamp();
+      entry.text ||= "Updated stat";
+      entry.character ||= character.name;
+    });
 
-    if (!Array.isArray(character.ammo)) {
-      character.ammo = [];
-    }
-
+    if (!Array.isArray(character.ammo)) character.ammo = [];
     character.ammo.forEach((entry) => {
+      entry.id ||= uid();
+      entry.weapon = (entry.weapon || "Weapon").toString();
       entry.max = Math.max(1, asInt(entry.max, 1));
       entry.current = clamp(asInt(entry.current, entry.max), 0, entry.max);
     });
 
-    if (!Array.isArray(character.history)) {
-      character.history = [];
-    }
+    ensureStatsArray(character);
 
-    character.history.forEach((entry) => {
-      entry.reason = normalizeReason(entry.reason);
-    });
-
-    ensureCollapseState(character);
+    delete character.baseStats;
+    delete character.customStats;
+    delete character.collapsedStats;
   });
 
+  if (!Array.isArray(stateToFix.history)) stateToFix.history = [];
   stateToFix.history.forEach((entry) => {
+    entry.id ||= uid();
     entry.reason = normalizeReason(entry.reason);
+    entry.time ||= timestamp();
+    entry.text ||= "Updated stat";
+    entry.character ||= "Unknown";
   });
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return { characters: [], selectedCharacterId: null, history: [] };
-    }
-
+    if (!raw) return { characters: [], selectedCharacterId: null, history: [] };
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed.characters) || !Array.isArray(parsed.history)) {
-      throw new Error("Invalid state");
-    }
-
+    if (!Array.isArray(parsed.characters) || !Array.isArray(parsed.history)) throw new Error("Invalid state");
     sanitizeForDisplay(parsed);
     return parsed;
   } catch {
@@ -224,58 +274,36 @@ function loadState() {
   }
 }
 
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
 function selectedCharacter() {
   return state.characters.find((character) => character.id === state.selectedCharacterId) || null;
 }
 
 function createCharacter(name, baseStats) {
-  const character = {
+  const coreStats = CORE_STATS.map((core) =>
+    buildCoreStat(
+      core,
+      baseStats[core.key] ?? core.baseFallback,
+      baseStats[core.key] ?? core.baseFallback,
+      false
+    )
+  );
+
+  return {
     id: uid(),
     name,
-    stats: { ...baseStats },
-    baseStats: { ...baseStats },
-    customStats: [],
-    collapsedStats: {},
     notes: "",
-    ammo: [],
     history: [],
+    stats: coreStats,
+    ammo: [],
   };
-  ensureCollapseState(character);
-  return character;
 }
 
-function getStatEntries(character) {
-  const coreEntries = CORE_STAT_CONFIG.map((entry) => ({
-    id: entry.key,
-    collapseKey: `core:${entry.key}`,
-    kind: "core",
-    type: entry.key.toUpperCase(),
-    label: entry.label,
-    requiresReason: entry.requiresReason,
-    deletable: entry.deletable,
-    getCurrent: () => character.stats[entry.key],
-    getBase: () => character.baseStats[entry.key],
-    setCurrent: (value) => {
-      character.stats[entry.key] = value;
-    },
-  }));
-
-  const customEntries = character.customStats.map((entry) => ({
-    id: entry.id,
-    collapseKey: `custom:${entry.id}`,
-    kind: "custom",
-    type: entry.type,
-    label: entry.label,
-    requiresReason: requiresReasonForType(entry.type),
-    deletable: true,
-    getCurrent: () => entry.current,
-    getBase: () => entry.base,
-    setCurrent: (value) => {
-      entry.current = value;
-    },
-  }));
-
-  return [...coreEntries, ...customEntries];
+function getCharacterStat(character, key) {
+  return character.stats.find((stat) => stat.key === key);
 }
 
 function render() {
@@ -299,80 +327,74 @@ function renderPartyList() {
       render();
     });
 
-    meta.textContent = `PPE ${character.stats.ppe} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc} • HP ${character.stats.hp} • ISP ${character.stats.isp}`;
+    const ppe = getCharacterStat(character, "PPE")?.current ?? 0;
+    const sdc = getCharacterStat(character, "SDC")?.current ?? 0;
+    const mdc = getCharacterStat(character, "MDC")?.current ?? 0;
+    const hp = getCharacterStat(character, "HP")?.current ?? 0;
+    const isp = getCharacterStat(character, "ISP")?.current ?? 0;
 
+    meta.textContent = `PPE ${ppe} • SDC ${sdc} • MDC ${mdc} • HP ${hp} • ISP ${isp}`;
     partyList.append(fragment);
   });
 }
 
-function renderDetail() {
-  const character = selectedCharacter();
-  if (!character) {
-    emptyDetail.hidden = false;
-    detailPanel.hidden = true;
-    return;
-  }
-
-  emptyDetail.hidden = true;
-  detailPanel.hidden = false;
-
-  detailNameInput.value = character.name;
-  characterNotes.value = character.notes;
-  renderStats(character);
-  renderAmmo(character);
-  renderCharacterHistory(character);
+function queueChange(change) {
+  pendingChange = change;
+  logDialogContext.textContent = change.context;
+  logReasonInput.value = "";
+  logDialog.showModal();
+  logReasonInput.focus();
 }
 
-function queueStatChange({ character, entry, delta, context }) {
-  const applyChange = (reason) => {
-    const before = entry.getCurrent();
-    const next = Math.max(0, before + delta);
-    entry.setCurrent(next);
-    const appliedDelta = next - before;
-    pushHistory(character, `${entry.label} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${next})`, reason, appliedDelta);
+function pushHistory(character, text, reason, delta = null) {
+  const entry = {
+    id: uid(),
+    character: character.name,
+    text,
+    reason: normalizeReason(reason),
+    delta,
+    time: timestamp(),
   };
 
-  if (!entry.requiresReason) {
-    applyChange("");
-    return;
-  }
-
-  queueChange({
-    context,
-    apply: (reason) => {
-      applyChange(reason);
-    },
-  });
+  character.history.unshift(entry);
+  state.history.unshift(entry);
+  saveState();
+  render();
 }
 
-function resetStatToBase(character, entry) {
-  const before = entry.getCurrent();
-  const next = entry.getBase();
-  entry.setCurrent(next);
-  const delta = next - before;
-  pushHistory(character, `${entry.label} reset to base (${next})`, "Reset to base", delta);
+function applyDelta(character, stat, delta, optionalReason = "") {
+  const before = stat.current;
+  stat.current = Math.max(0, stat.current + delta);
+  const appliedDelta = stat.current - before;
+  pushHistory(character, `${stat.title} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${stat.current})`, optionalReason, appliedDelta);
 }
 
-function deleteStatBlock(character, entry) {
-  if (!entry.deletable || entry.kind !== "custom") {
-    return;
-  }
+function resetToBase(character, stat) {
+  const before = stat.current;
+  stat.current = stat.base;
+  const delta = stat.current - before;
+  pushHistory(character, `${stat.title} reset to base (${stat.current})`, "Reset to base", delta);
+}
 
-  const confirmed = window.confirm(`Delete stat block "${entry.label}"?`);
-  if (!confirmed) {
-    return;
-  }
+function toggleCollapse(character, stat) {
+  stat.collapsed = !stat.collapsed;
+  saveState();
+  renderStats(character);
+}
 
-  character.customStats = character.customStats.filter((stat) => stat.id !== entry.id);
-  delete character.collapsedStats[entry.collapseKey];
-  pushHistory(character, `Deleted stat block: ${entry.label}`, "", 0);
+function deleteStat(character, stat) {
+  const isCore = CORE_STATS.some((core) => core.key === stat.key);
+  if (isCore) return;
+
+  const confirmed = window.confirm(`Delete stat block "${stat.title}"?`);
+  if (!confirmed) return;
+
+  character.stats = character.stats.filter((entry) => entry.id !== stat.id);
+  pushHistory(character, `Deleted stat block: ${stat.title}`, "", 0);
 }
 
 function wireCustomAdjustment({ customAmountInput, onApply }) {
-  const customButtons = customAmountInput
-    .closest(".custom-controls")
-    .querySelectorAll("button[data-custom-action]");
-
+  const customButtons = customAmountInput.closest(".custom-controls").querySelectorAll("button[data-custom-action]");
   customButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const amount = Math.max(1, asInt(customAmountInput.value, 1));
@@ -384,11 +406,9 @@ function wireCustomAdjustment({ customAmountInput, onApply }) {
 }
 
 function renderStats(character) {
-  ensureCollapseState(character);
   statsGrid.innerHTML = "";
-  const entries = getStatEntries(character);
 
-  entries.forEach((entry) => {
+  character.stats.forEach((stat) => {
     const fragment = statRowTemplate.content.cloneNode(true);
     const label = fragment.querySelector(".stat-label");
     const headerValue = fragment.querySelector(".stat-header-value");
@@ -400,56 +420,63 @@ function renderStats(character) {
     const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
 
-    const currentValue = entry.getCurrent();
-    const baseValue = entry.getBase();
-    const collapsed = character.collapsedStats[entry.collapseKey] === true;
+    label.textContent = stat.title;
+    headerValue.textContent = `${stat.current}`;
+    value.textContent = `${stat.current} (Base ${stat.base})`;
 
-    label.textContent = entry.label;
-    headerValue.textContent = `${currentValue}`;
-    value.textContent = `${currentValue} (Base ${baseValue})`;
-
-    body.hidden = collapsed;
-    toggleButton.textContent = collapsed ? "▸" : "▾";
+    body.hidden = stat.collapsed === true;
+    toggleButton.textContent = stat.collapsed ? "▸" : "▾";
     toggleButton.addEventListener("click", () => {
-      character.collapsedStats[entry.collapseKey] = !character.collapsedStats[entry.collapseKey];
-      saveState();
-      renderStats(character);
+      toggleCollapse(character, stat);
     });
 
-    deleteButton.hidden = !entry.deletable;
+    const isCore = CORE_STATS.some((core) => core.key === stat.key);
+    deleteButton.hidden = isCore;
     deleteButton.addEventListener("click", () => {
-      deleteStatBlock(character, entry);
+      deleteStat(character, stat);
     });
 
     quickButtons.forEach((button) => {
       const buttonDelta = asInt(button.dataset.delta, 0);
-      if ((entry.type === "APM" || entry.label === "Attacks per Melee") && Math.abs(buttonDelta) === 5) {
+      if (stat.key === "APM" && Math.abs(buttonDelta) === 5) {
         button.hidden = true;
         return;
       }
 
       button.addEventListener("click", () => {
-        queueStatChange({
-          character,
-          entry,
-          delta: buttonDelta,
-          context: `${character.name}: ${entry.label} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`,
+        const context = `${character.name}: ${stat.title} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`;
+        if (stat.loggable === false) {
+          applyDelta(character, stat, buttonDelta, "");
+          return;
+        }
+
+        queueChange({
+          context,
+          apply: (reason) => {
+            applyDelta(character, stat, buttonDelta, reason);
+          },
         });
       });
     });
 
     resetButton.addEventListener("click", () => {
-      resetStatToBase(character, entry);
+      resetToBase(character, stat);
     });
 
     wireCustomAdjustment({
       customAmountInput,
       onApply: (delta) => {
-        queueStatChange({
-          character,
-          entry,
-          delta,
-          context: `${character.name}: ${entry.label} custom ${delta >= 0 ? "+" : ""}${delta}`,
+        const context = `${character.name}: ${stat.title} custom ${delta >= 0 ? "+" : ""}${delta}`;
+        if (stat.loggable === false) {
+          applyDelta(character, stat, delta, "");
+          return;
+        }
+
+        queueChange({
+          context,
+          apply: (reason) => {
+            applyDelta(character, stat, delta, reason);
+          },
         });
       },
     });
@@ -526,9 +553,7 @@ function renderAmmo(character) {
 
     removeButton.addEventListener("click", () => {
       const confirmed = window.confirm(`Remove ammo tracker for ${ammo.weapon}?`);
-      if (!confirmed) {
-        return;
-      }
+      if (!confirmed) return;
       character.ammo = character.ammo.filter((entry) => entry.id !== ammo.id);
       pushHistory(character, `Removed ammo tracker: ${ammo.weapon}`, "System");
     });
@@ -540,14 +565,10 @@ function renderAmmo(character) {
 function setHistoryReason(character, entryId, reason) {
   const updatedReason = normalizeReason(reason);
   const characterEntry = character.history.find((entry) => entry.id === entryId);
-  if (characterEntry) {
-    characterEntry.reason = updatedReason;
-  }
+  if (characterEntry) characterEntry.reason = updatedReason;
 
   const globalEntry = state.history.find((entry) => entry.id === entryId);
-  if (globalEntry) {
-    globalEntry.reason = updatedReason;
-  }
+  if (globalEntry) globalEntry.reason = updatedReason;
 
   saveState();
   renderCharacterHistory(character);
@@ -628,70 +649,59 @@ function renderGlobalHistory() {
   });
 }
 
-function pushHistory(character, text, reason, delta = null) {
-  const entry = {
-    id: uid(),
-    character: character.name,
-    text,
-    reason: normalizeReason(reason),
-    delta,
-    time: timestamp(),
-  };
+function renderDetail() {
+  const character = selectedCharacter();
+  if (!character) {
+    emptyDetail.hidden = false;
+    detailPanel.hidden = true;
+    return;
+  }
 
-  character.history.unshift(entry);
-  state.history.unshift(entry);
-  saveState();
-  render();
+  emptyDetail.hidden = true;
+  detailPanel.hidden = false;
+  detailNameInput.value = character.name;
+  characterNotes.value = character.notes;
+  renderStats(character);
+  renderAmmo(character);
+  renderCharacterHistory(character);
 }
 
-function queueChange(change) {
-  pendingChange = change;
-  logDialogContext.textContent = change.context;
-  logReasonInput.value = "";
-  logDialog.showModal();
-  logReasonInput.focus();
-}
+function promptForBaseStats() {
+  const defaults = CORE_STATS.reduce((acc, core) => {
+    acc[core.key] = core.baseFallback;
+    return acc;
+  }, {});
 
-function promptForBaseStats(seed = defaultStats()) {
-  const ppe = window.prompt("Base PPE", `${seed.ppe}`);
+  const ppe = window.prompt("Base PPE", `${defaults.PPE}`);
   if (ppe === null) return null;
-
-  const sdc = window.prompt("Base SDC", `${seed.sdc}`);
+  const sdc = window.prompt("Base SDC", `${defaults.SDC}`);
   if (sdc === null) return null;
-
-  const mdc = window.prompt("Base MDC", `${seed.mdc}`);
+  const mdc = window.prompt("Base MDC", `${defaults.MDC}`);
   if (mdc === null) return null;
-
-  const hp = window.prompt("Base HP", `${seed.hp}`);
+  const hp = window.prompt("Base HP", `${defaults.HP}`);
   if (hp === null) return null;
-
-  const isp = window.prompt("Base ISP", `${seed.isp}`);
+  const isp = window.prompt("Base ISP", `${defaults.ISP}`);
   if (isp === null) return null;
-
-  const attacks = window.prompt("Base Attacks per melee", `${seed.attacks}`);
-  if (attacks === null) return null;
+  const apm = window.prompt("Base Attacks per melee", `${defaults.APM}`);
+  if (apm === null) return null;
 
   return {
-    ppe: Math.max(0, asInt(ppe, seed.ppe)),
-    sdc: Math.max(0, asInt(sdc, seed.sdc)),
-    mdc: Math.max(0, asInt(mdc, seed.mdc)),
-    hp: Math.max(0, asInt(hp, seed.hp)),
-    isp: Math.max(0, asInt(isp, seed.isp)),
-    attacks: Math.max(0, asInt(attacks, seed.attacks)),
+    PPE: Math.max(0, asInt(ppe, defaults.PPE)),
+    SDC: Math.max(0, asInt(sdc, defaults.SDC)),
+    MDC: Math.max(0, asInt(mdc, defaults.MDC)),
+    HP: Math.max(0, asInt(hp, defaults.HP)),
+    ISP: Math.max(0, asInt(isp, defaults.ISP)),
+    APM: Math.max(0, asInt(apm, defaults.APM)),
   };
 }
 
 addCharacterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const name = newCharacterNameInput.value.trim();
-  if (!name) {
-    return;
-  }
+  if (!name) return;
 
   const baseStats = promptForBaseStats();
-  if (!baseStats) {
-    return;
-  }
+  if (!baseStats) return;
 
   const character = createCharacter(name, baseStats);
   state.characters.push(character);
@@ -703,9 +713,7 @@ addCharacterForm.addEventListener("submit", (event) => {
 
 detailNameInput.addEventListener("change", () => {
   const character = selectedCharacter();
-  if (!character) {
-    return;
-  }
+  if (!character) return;
 
   const nextName = detailNameInput.value.trim();
   if (!nextName) {
@@ -720,49 +728,38 @@ detailNameInput.addEventListener("change", () => {
 
 characterNotes.addEventListener("input", () => {
   const character = selectedCharacter();
-  if (!character) {
-    return;
-  }
-
+  if (!character) return;
   character.notes = characterNotes.value;
   saveState();
 });
 
 editBaseStatsButton.addEventListener("click", () => {
   const character = selectedCharacter();
-  if (!character) {
-    return;
-  }
+  if (!character) return;
 
-  basePpeInput.value = character.baseStats.ppe;
-  baseSdcInput.value = character.baseStats.sdc;
-  baseMdcInput.value = character.baseStats.mdc;
-  baseHpInput.value = character.baseStats.hp;
-  baseIspInput.value = character.baseStats.isp;
-  baseAttacksInput.value = character.baseStats.attacks;
+  basePpeInput.value = getCharacterStat(character, "PPE")?.base ?? 0;
+  baseSdcInput.value = getCharacterStat(character, "SDC")?.base ?? 0;
+  baseMdcInput.value = getCharacterStat(character, "MDC")?.base ?? 0;
+  baseHpInput.value = getCharacterStat(character, "HP")?.base ?? 0;
+  baseIspInput.value = getCharacterStat(character, "ISP")?.base ?? 0;
+  baseAttacksInput.value = getCharacterStat(character, "APM")?.base ?? 0;
   applyBaseToCurrentInput.checked = false;
   baseStatsDialog.showModal();
 });
 
 addStatBlockButton.addEventListener("click", () => {
   const character = selectedCharacter();
-  if (!character) {
-    return;
-  }
+  if (!character) return;
 
   const typeInput = window.prompt("Stat type (Custom, PPE, SDC, MDC, HP, ISP, APM)", "Custom");
-  if (typeInput === null) {
-    return;
-  }
+  if (typeInput === null) return;
 
   const normalizedType = typeInput.trim().toUpperCase() || "CUSTOM";
   const allowed = ["CUSTOM", "PPE", "SDC", "MDC", "HP", "ISP", "APM"];
-  const type = allowed.includes(normalizedType) ? normalizedType : "CUSTOM";
+  const chosenType = allowed.includes(normalizedType) ? normalizedType : "CUSTOM";
 
-  const label = window.prompt("Stat title/label", type === "CUSTOM" ? "Custom Stat" : type);
-  if (label === null) {
-    return;
-  }
+  const label = window.prompt("Stat title/label", chosenType === "CUSTOM" ? "Custom Stat" : chosenType);
+  if (label === null) return;
 
   const cleanLabel = label.trim();
   if (!cleanLabel) {
@@ -770,32 +767,29 @@ addStatBlockButton.addEventListener("click", () => {
     return;
   }
 
-  const base = window.prompt("Base value", "0");
-  if (base === null) {
-    return;
-  }
+  const baseInput = window.prompt("Base value", "0");
+  if (baseInput === null) return;
 
-  const baseValue = Math.max(0, asInt(base, 0));
+  const baseValue = Math.max(0, asInt(baseInput, 0));
 
-  character.customStats.push({
+  const stat = {
     id: uid(),
-    type,
-    label: cleanLabel,
+    key: chosenType === "CUSTOM" ? "" : chosenType,
+    title: cleanLabel,
     base: baseValue,
     current: baseValue,
-  });
+    collapsed: false,
+    loggable: chosenType !== "APM",
+  };
 
-  ensureCollapseState(character);
-  character.collapsedStats[`custom:${character.customStats[character.customStats.length - 1].id}`] = false;
+  character.stats.push(stat);
   saveState();
   render();
 });
 
 baseStatsForm.addEventListener("submit", (event) => {
   const submitButton = event.submitter;
-  if (!submitButton || submitButton.value !== "confirm") {
-    return;
-  }
+  if (!submitButton || submitButton.value !== "confirm") return;
 
   event.preventDefault();
   const character = selectedCharacter();
@@ -805,19 +799,22 @@ baseStatsForm.addEventListener("submit", (event) => {
   }
 
   const nextBase = {
-    ppe: Math.max(0, asInt(basePpeInput.value, character.baseStats.ppe)),
-    sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc)),
-    mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc)),
-    hp: Math.max(0, asInt(baseHpInput.value, character.baseStats.hp)),
-    isp: Math.max(0, asInt(baseIspInput.value, character.baseStats.isp)),
-    attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks)),
+    PPE: Math.max(0, asInt(basePpeInput.value, getCharacterStat(character, "PPE")?.base ?? 0)),
+    SDC: Math.max(0, asInt(baseSdcInput.value, getCharacterStat(character, "SDC")?.base ?? 0)),
+    MDC: Math.max(0, asInt(baseMdcInput.value, getCharacterStat(character, "MDC")?.base ?? 0)),
+    HP: Math.max(0, asInt(baseHpInput.value, getCharacterStat(character, "HP")?.base ?? 0)),
+    ISP: Math.max(0, asInt(baseIspInput.value, getCharacterStat(character, "ISP")?.base ?? 0)),
+    APM: Math.max(0, asInt(baseAttacksInput.value, getCharacterStat(character, "APM")?.base ?? 0)),
   };
 
-  character.baseStats = nextBase;
-
-  if (applyBaseToCurrentInput.checked) {
-    character.stats = { ...nextBase };
-  }
+  Object.entries(nextBase).forEach(([key, value]) => {
+    const stat = getCharacterStat(character, key);
+    if (!stat) return;
+    stat.base = value;
+    if (applyBaseToCurrentInput.checked) {
+      stat.current = value;
+    }
+  });
 
   saveState();
   render();
@@ -826,14 +823,10 @@ baseStatsForm.addEventListener("submit", (event) => {
 
 deleteCharacterButton.addEventListener("click", () => {
   const character = selectedCharacter();
-  if (!character) {
-    return;
-  }
+  if (!character) return;
 
   const confirmed = window.confirm(`Delete ${character.name}? This cannot be undone.`);
-  if (!confirmed) {
-    return;
-  }
+  if (!confirmed) return;
 
   state.characters = state.characters.filter((entry) => entry.id !== character.id);
   if (state.selectedCharacterId === character.id) {
@@ -846,15 +839,11 @@ deleteCharacterButton.addEventListener("click", () => {
 addAmmoForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const character = selectedCharacter();
-  if (!character) {
-    return;
-  }
+  if (!character) return;
 
   const weapon = ammoWeaponInput.value.trim();
   const max = Math.max(1, asInt(ammoMaxInput.value, 1));
-  if (!weapon) {
-    return;
-  }
+  if (!weapon) return;
 
   character.ammo.push({ id: uid(), weapon, current: max, max });
   pushHistory(character, `Added ammo tracker: ${weapon} (${max}/${max})`, "System");
@@ -898,9 +887,7 @@ importTriggerButton.addEventListener("click", () => {
 
 importFileInput.addEventListener("change", async () => {
   const file = importFileInput.files?.[0];
-  if (!file) {
-    return;
-  }
+  if (!file) return;
 
   const text = await file.text();
   let parsed;
@@ -912,9 +899,7 @@ importFileInput.addEventListener("change", async () => {
   }
 
   const confirmed = window.confirm("Importing will overwrite current dashboard data. Continue?");
-  if (!confirmed) {
-    return;
-  }
+  if (!confirmed) return;
 
   if (!Array.isArray(parsed.characters) || !Array.isArray(parsed.history)) {
     window.alert("JSON does not match expected dashboard export format.");
@@ -932,14 +917,10 @@ importFileInput.addEventListener("change", async () => {
 
 resetDataButton.addEventListener("click", () => {
   const firstConfirm = window.confirm("This will erase all saved dashboard data. Continue?");
-  if (!firstConfirm) {
-    return;
-  }
+  if (!firstConfirm) return;
 
   const typed = window.prompt('Type RESET to permanently clear all data.');
-  if (typed !== "RESET") {
-    return;
-  }
+  if (typed !== "RESET") return;
 
   state.characters = [];
   state.selectedCharacterId = null;
