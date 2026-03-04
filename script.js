@@ -133,6 +133,26 @@ function normalizeCustomStat(entry, index) {
   };
 }
 
+function ensureCollapseState(character) {
+  if (!character.collapsedStats || typeof character.collapsedStats !== "object") {
+    character.collapsedStats = {};
+  }
+
+  CORE_STAT_CONFIG.forEach((entry) => {
+    const key = `core:${entry.key}`;
+    if (typeof character.collapsedStats[key] !== "boolean") {
+      character.collapsedStats[key] = false;
+    }
+  });
+
+  character.customStats.forEach((entry) => {
+    const key = `custom:${entry.id}`;
+    if (typeof character.collapsedStats[key] !== "boolean") {
+      character.collapsedStats[key] = false;
+    }
+  });
+}
+
 function sanitizeForDisplay(stateToFix) {
   stateToFix.characters.forEach((character) => {
     const defaults = defaultStats();
@@ -172,6 +192,8 @@ function sanitizeForDisplay(stateToFix) {
     character.history.forEach((entry) => {
       entry.reason = normalizeReason(entry.reason);
     });
+
+    ensureCollapseState(character);
   });
 
   stateToFix.history.forEach((entry) => {
@@ -207,21 +229,25 @@ function selectedCharacter() {
 }
 
 function createCharacter(name, baseStats) {
-  return {
+  const character = {
     id: uid(),
     name,
     stats: { ...baseStats },
     baseStats: { ...baseStats },
     customStats: [],
+    collapsedStats: {},
     notes: "",
     ammo: [],
     history: [],
   };
+  ensureCollapseState(character);
+  return character;
 }
 
 function getStatEntries(character) {
   const coreEntries = CORE_STAT_CONFIG.map((entry) => ({
     id: entry.key,
+    collapseKey: `core:${entry.key}`,
     kind: "core",
     type: entry.key.toUpperCase(),
     label: entry.label,
@@ -236,6 +262,7 @@ function getStatEntries(character) {
 
   const customEntries = character.customStats.map((entry) => ({
     id: entry.id,
+    collapseKey: `custom:${entry.id}`,
     kind: "custom",
     type: entry.type,
     label: entry.label,
@@ -337,6 +364,7 @@ function deleteStatBlock(character, entry) {
   }
 
   character.customStats = character.customStats.filter((stat) => stat.id !== entry.id);
+  delete character.collapsedStats[entry.collapseKey];
   pushHistory(character, `Deleted stat block: ${entry.label}`, "", 0);
 }
 
@@ -356,20 +384,37 @@ function wireCustomAdjustment({ customAmountInput, onApply }) {
 }
 
 function renderStats(character) {
+  ensureCollapseState(character);
   statsGrid.innerHTML = "";
   const entries = getStatEntries(character);
 
   entries.forEach((entry) => {
     const fragment = statRowTemplate.content.cloneNode(true);
     const label = fragment.querySelector(".stat-label");
+    const headerValue = fragment.querySelector(".stat-header-value");
     const value = fragment.querySelector(".stat-value");
+    const body = fragment.querySelector(".stat-body");
+    const toggleButton = fragment.querySelector(".toggle-stat");
     const quickButtons = fragment.querySelectorAll(".quick-controls button[data-delta]");
     const deleteButton = fragment.querySelector(".delete-stat-block");
     const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
 
+    const currentValue = entry.getCurrent();
+    const baseValue = entry.getBase();
+    const collapsed = character.collapsedStats[entry.collapseKey] === true;
+
     label.textContent = entry.label;
-    value.textContent = `${entry.getCurrent()} (Base ${entry.getBase()})`;
+    headerValue.textContent = `${currentValue}`;
+    value.textContent = `${currentValue} (Base ${baseValue})`;
+
+    body.hidden = collapsed;
+    toggleButton.textContent = collapsed ? "▸" : "▾";
+    toggleButton.addEventListener("click", () => {
+      character.collapsedStats[entry.collapseKey] = !character.collapsedStats[entry.collapseKey];
+      saveState();
+      renderStats(character);
+    });
 
     deleteButton.hidden = !entry.deletable;
     deleteButton.addEventListener("click", () => {
@@ -740,6 +785,8 @@ addStatBlockButton.addEventListener("click", () => {
     current: baseValue,
   });
 
+  ensureCollapseState(character);
+  character.collapsedStats[`custom:${character.customStats[character.customStats.length - 1].id}`] = false;
   saveState();
   render();
 });
