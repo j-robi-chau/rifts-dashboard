@@ -198,9 +198,31 @@ textarea:focus-visible,
   gap: 0.5rem;
 }
 
+.stat-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.toggle-stat {
+  padding: 0.2rem 0.45rem;
+  line-height: 1;
+}
+
+.stat-header-value {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .stat-top .delete-stat-block {
   padding: 0.2rem 0.5rem;
   line-height: 1;
+}
+
+.stat-body {
+  margin-top: 0.35rem;
 }
 
 .stat-value {

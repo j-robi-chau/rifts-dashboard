@@ -155,24 +155,30 @@
     <template id="stat-row-template">
       <article class="stat-row">
         <div class="stat-top">
-          <h4 class="stat-label"></h4>
+          <div class="stat-main">
+            <button type="button" class="secondary toggle-stat" title="Collapse/expand stat block">▾</button>
+            <h4 class="stat-label"></h4>
+            <span class="stat-header-value"></span>
+          </div>
           <button type="button" class="danger delete-stat-block" title="Delete stat block">-</button>
         </div>
-        <p class="stat-value"></p>
-        <div class="quick-controls">
-          <button type="button" data-delta="-5">-5</button>
-          <button type="button" data-delta="-1">-1</button>
-          <button type="button" data-delta="1">+1</button>
-          <button type="button" data-delta="5">+5</button>
-          <button type="button" class="secondary reset-to-base">Reset</button>
-        </div>
-        <div class="custom-controls">
-          <label>
-            Amount
-            <input class="mod-input" type="number" min="1" value="1" />
-          </label>
-          <button type="button" data-custom-action="subtract" class="secondary">-</button>
-          <button type="button" data-custom-action="add">+</button>
+        <div class="stat-body">
+          <p class="stat-value"></p>
+          <div class="quick-controls">
+            <button type="button" data-delta="-5">-5</button>
+            <button type="button" data-delta="-1">-1</button>
+            <button type="button" data-delta="1">+1</button>
+            <button type="button" data-delta="5">+5</button>
+            <button type="button" class="secondary reset-to-base">Reset</button>
+          </div>
+          <div class="custom-controls">
+            <label>
+              Amount
+              <input class="mod-input" type="number" min="1" value="1" />
+            </label>
+            <button type="button" data-custom-action="subtract" class="secondary">-</button>
+            <button type="button" data-custom-action="add">+</button>
+          </div>
         </div>
       </article>
     </template>
