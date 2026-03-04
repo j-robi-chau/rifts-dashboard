@@ -191,6 +191,18 @@ textarea:focus-visible,
   margin-bottom: 0.8rem;
 }
 
+.stat-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stat-top .delete-stat-block {
+  padding: 0.2rem 0.5rem;
+  line-height: 1;
+}
+
 .stat-value {
   color: var(--accent);
   font-size: 1.06rem;

@@ -125,6 +125,10 @@
           <input id="base-hp" type="number" min="0" required />
         </label>
         <label>
+          Base ISP
+          <input id="base-isp" type="number" min="0" required />
+        </label>
+        <label>
           Base Attacks per melee
           <input id="base-attacks" type="number" min="0" required />
         </label>
@@ -150,7 +154,10 @@
 
     <template id="stat-row-template">
       <article class="stat-row">
-        <h4 class="stat-label"></h4>
+        <div class="stat-top">
+          <h4 class="stat-label"></h4>
+          <button type="button" class="danger delete-stat-block" title="Delete stat block">-</button>
+        </div>
         <p class="stat-value"></p>
         <div class="quick-controls">
           <button type="button" data-delta="-5">-5</button>
@@ -192,12 +199,6 @@
           <button type="button" data-custom-action="subtract" class="secondary">-</button>
           <button type="button" data-custom-action="add">+</button>
         </div>
-      </li>
-    </template>
-
-    <template id="history-item-template">
-      <li>
-        <p class="history-line"></p>
       </li>
     </template>
 

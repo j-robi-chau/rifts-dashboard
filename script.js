@@ -6,15 +6,17 @@ const defaultStats = () => ({
   sdc: 30,
   mdc: 20,
   hp: 0,
+  isp: 0,
   attacks: 4,
 });
 
 const CORE_STAT_CONFIG = [
-  { key: "ppe", label: "PPE", requiresReason: true },
-  { key: "sdc", label: "SDC", requiresReason: true },
-  { key: "mdc", label: "MDC", requiresReason: true },
-  { key: "hp", label: "HP", requiresReason: true },
-  { key: "attacks", label: "Attacks per Melee", requiresReason: false },
+  { key: "ppe", label: "PPE", requiresReason: true, deletable: false },
+  { key: "sdc", label: "SDC", requiresReason: true, deletable: false },
+  { key: "mdc", label: "MDC", requiresReason: true, deletable: false },
+  { key: "hp", label: "HP", requiresReason: true, deletable: false },
+  { key: "isp", label: "ISP", requiresReason: true, deletable: false },
+  { key: "attacks", label: "Attacks per Melee", requiresReason: false, deletable: false },
 ];
 
 const state = loadState();
@@ -52,6 +54,7 @@ const basePpeInput = document.querySelector("#base-ppe");
 const baseSdcInput = document.querySelector("#base-sdc");
 const baseMdcInput = document.querySelector("#base-mdc");
 const baseHpInput = document.querySelector("#base-hp");
+const baseIspInput = document.querySelector("#base-isp");
 const baseAttacksInput = document.querySelector("#base-attacks");
 const applyBaseToCurrentInput = document.querySelector("#apply-base-to-current");
 
@@ -95,6 +98,11 @@ function normalizeReason(reason) {
   return trimmed || DEFAULT_EMPTY_NOTE;
 }
 
+function requiresReasonForType(type) {
+  const normalized = (type || "").trim().toUpperCase();
+  return normalized !== "APM";
+}
+
 function buildBaseStats(character, defaults) {
   const currentStats = character.stats || defaults;
   const existingBase = character.baseStats || {};
@@ -104,15 +112,16 @@ function buildBaseStats(character, defaults) {
     sdc: normalizeStatValue(existingBase.sdc, normalizeStatValue(currentStats.sdc, defaults.sdc)),
     mdc: normalizeStatValue(existingBase.mdc, normalizeStatValue(currentStats.mdc, defaults.mdc)),
     hp: normalizeStatValue(existingBase.hp, normalizeStatValue(currentStats.hp, 0)),
+    isp: normalizeStatValue(existingBase.isp, normalizeStatValue(currentStats.isp, 0)),
     attacks: normalizeStatValue(existingBase.attacks, normalizeStatValue(currentStats.attacks, defaults.attacks)),
   };
 }
 
-function normalizeCustomStat(entry, index, defaults) {
+function normalizeCustomStat(entry, index) {
   const id = entry.id || uid();
-  const type = (entry.type || "Stat").toString().trim() || "Stat";
-  const label = (entry.label || type || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
-  const base = normalizeStatValue(entry.base, normalizeStatValue(entry.current, defaults.hp));
+  const type = (entry.type || "CUSTOM").toString().trim().toUpperCase() || "CUSTOM";
+  const label = (entry.label || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
+  const base = normalizeStatValue(entry.base, normalizeStatValue(entry.current, 0));
   const current = normalizeStatValue(entry.current, base);
 
   return {
@@ -133,7 +142,8 @@ function sanitizeForDisplay(stateToFix) {
       ppe: normalizeStatValue(character.stats.ppe, defaults.ppe),
       sdc: normalizeStatValue(character.stats.sdc, defaults.sdc),
       mdc: normalizeStatValue(character.stats.mdc, defaults.mdc),
-      hp: normalizeStatValue(character.stats.hp, normalizeStatValue(character.stats.hp, 0)),
+      hp: normalizeStatValue(character.stats.hp, 0),
+      isp: normalizeStatValue(character.stats.isp, 0),
       attacks: normalizeStatValue(character.stats.attacks, defaults.attacks),
     };
 
@@ -142,7 +152,7 @@ function sanitizeForDisplay(stateToFix) {
     if (!Array.isArray(character.customStats)) {
       character.customStats = [];
     }
-    character.customStats = character.customStats.map((entry, index) => normalizeCustomStat(entry, index, defaults));
+    character.customStats = character.customStats.map((entry, index) => normalizeCustomStat(entry, index));
 
     character.notes = typeof character.notes === "string" ? character.notes : "";
 
@@ -158,6 +168,7 @@ function sanitizeForDisplay(stateToFix) {
     if (!Array.isArray(character.history)) {
       character.history = [];
     }
+
     character.history.forEach((entry) => {
       entry.reason = normalizeReason(entry.reason);
     });
@@ -210,10 +221,12 @@ function createCharacter(name, baseStats) {
 
 function getStatEntries(character) {
   const coreEntries = CORE_STAT_CONFIG.map((entry) => ({
+    id: entry.key,
     kind: "core",
-    key: entry.key,
+    type: entry.key.toUpperCase(),
     label: entry.label,
     requiresReason: entry.requiresReason,
+    deletable: entry.deletable,
     getCurrent: () => character.stats[entry.key],
     getBase: () => character.baseStats[entry.key],
     setCurrent: (value) => {
@@ -222,10 +235,12 @@ function getStatEntries(character) {
   }));
 
   const customEntries = character.customStats.map((entry) => ({
+    id: entry.id,
     kind: "custom",
-    key: entry.id,
+    type: entry.type,
     label: entry.label,
-    requiresReason: true,
+    requiresReason: requiresReasonForType(entry.type),
+    deletable: true,
     getCurrent: () => entry.current,
     getBase: () => entry.base,
     setCurrent: (value) => {
@@ -257,7 +272,7 @@ function renderPartyList() {
       render();
     });
 
-    meta.textContent = `PPE ${character.stats.ppe} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc} • HP ${character.stats.hp}`;
+    meta.textContent = `PPE ${character.stats.ppe} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc} • HP ${character.stats.hp} • ISP ${character.stats.isp}`;
 
     partyList.append(fragment);
   });
@@ -311,6 +326,20 @@ function resetStatToBase(character, entry) {
   pushHistory(character, `${entry.label} reset to base (${next})`, "Reset to base", delta);
 }
 
+function deleteStatBlock(character, entry) {
+  if (!entry.deletable || entry.kind !== "custom") {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete stat block "${entry.label}"?`);
+  if (!confirmed) {
+    return;
+  }
+
+  character.customStats = character.customStats.filter((stat) => stat.id !== entry.id);
+  pushHistory(character, `Deleted stat block: ${entry.label}`, "", 0);
+}
+
 function wireCustomAdjustment({ customAmountInput, onApply }) {
   const customButtons = customAmountInput
     .closest(".custom-controls")
@@ -335,15 +364,21 @@ function renderStats(character) {
     const label = fragment.querySelector(".stat-label");
     const value = fragment.querySelector(".stat-value");
     const quickButtons = fragment.querySelectorAll(".quick-controls button[data-delta]");
+    const deleteButton = fragment.querySelector(".delete-stat-block");
     const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
 
     label.textContent = entry.label;
     value.textContent = `${entry.getCurrent()} (Base ${entry.getBase()})`;
 
+    deleteButton.hidden = !entry.deletable;
+    deleteButton.addEventListener("click", () => {
+      deleteStatBlock(character, entry);
+    });
+
     quickButtons.forEach((button) => {
       const buttonDelta = asInt(button.dataset.delta, 0);
-      if (entry.label === "Attacks per Melee" && Math.abs(buttonDelta) === 5) {
+      if ((entry.type === "APM" || entry.label === "Attacks per Melee") && Math.abs(buttonDelta) === 5) {
         button.hidden = true;
         return;
       }
@@ -585,6 +620,9 @@ function promptForBaseStats(seed = defaultStats()) {
   const hp = window.prompt("Base HP", `${seed.hp}`);
   if (hp === null) return null;
 
+  const isp = window.prompt("Base ISP", `${seed.isp}`);
+  if (isp === null) return null;
+
   const attacks = window.prompt("Base Attacks per melee", `${seed.attacks}`);
   if (attacks === null) return null;
 
@@ -593,6 +631,7 @@ function promptForBaseStats(seed = defaultStats()) {
     sdc: Math.max(0, asInt(sdc, seed.sdc)),
     mdc: Math.max(0, asInt(mdc, seed.mdc)),
     hp: Math.max(0, asInt(hp, seed.hp)),
+    isp: Math.max(0, asInt(isp, seed.isp)),
     attacks: Math.max(0, asInt(attacks, seed.attacks)),
   };
 }
@@ -654,6 +693,7 @@ editBaseStatsButton.addEventListener("click", () => {
   baseSdcInput.value = character.baseStats.sdc;
   baseMdcInput.value = character.baseStats.mdc;
   baseHpInput.value = character.baseStats.hp;
+  baseIspInput.value = character.baseStats.isp;
   baseAttacksInput.value = character.baseStats.attacks;
   applyBaseToCurrentInput.checked = false;
   baseStatsDialog.showModal();
@@ -665,13 +705,23 @@ addStatBlockButton.addEventListener("click", () => {
     return;
   }
 
-  const type = window.prompt("Stat type", "Resource");
-  if (type === null) {
+  const typeInput = window.prompt("Stat type (Custom, PPE, SDC, MDC, HP, ISP, APM)", "Custom");
+  if (typeInput === null) {
     return;
   }
 
-  const label = window.prompt("Stat title/label", type || "Custom Stat");
+  const normalizedType = typeInput.trim().toUpperCase() || "CUSTOM";
+  const allowed = ["CUSTOM", "PPE", "SDC", "MDC", "HP", "ISP", "APM"];
+  const type = allowed.includes(normalizedType) ? normalizedType : "CUSTOM";
+
+  const label = window.prompt("Stat title/label", type === "CUSTOM" ? "Custom Stat" : type);
   if (label === null) {
+    return;
+  }
+
+  const cleanLabel = label.trim();
+  if (!cleanLabel) {
+    window.alert("Stat title/label is required.");
     return;
   }
 
@@ -684,8 +734,8 @@ addStatBlockButton.addEventListener("click", () => {
 
   character.customStats.push({
     id: uid(),
-    type: (type || "Resource").trim() || "Resource",
-    label: (label || type || "Custom Stat").trim() || "Custom Stat",
+    type,
+    label: cleanLabel,
     base: baseValue,
     current: baseValue,
   });
@@ -712,6 +762,7 @@ baseStatsForm.addEventListener("submit", (event) => {
     sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc)),
     mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc)),
     hp: Math.max(0, asInt(baseHpInput.value, character.baseStats.hp)),
+    isp: Math.max(0, asInt(baseIspInput.value, character.baseStats.isp)),
     attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks)),
   };
 
