@@ -1,14 +1,16 @@
 const STORAGE_KEY = "rifts_dashboard_v1";
-const DEFAULT_EMPTY_NOTE = "(no note)";
+const SAVE_FLASH_MS = 1600;
+const CORE_STAT_ORDER = ["hp", "ppe", "sdc", "mdc", "attacks"];
+const BANK_CURRENCIES = ["credits", "gold", "emeralds", "sapphires", "diamonds", "rubies"];
+const DEFAULT_HISTORY_FILTERS = { character: "all", stat: "all" };
 
-const CORE_STATS = [
-  { key: "PPE", title: "PPE", baseFallback: 50, loggable: true },
-  { key: "SDC", title: "SDC", baseFallback: 30, loggable: true },
-  { key: "MDC", title: "MDC", baseFallback: 20, loggable: true },
-  { key: "HP", title: "HP", baseFallback: 0, loggable: true },
-  { key: "ISP", title: "ISP", baseFallback: 0, loggable: true },
-  { key: "APM", title: "Attacks per Melee", baseFallback: 4, loggable: false },
-];
+const defaultStats = () => ({
+  hp: 0,
+  ppe: 50,
+  sdc: 30,
+  mdc: 20,
+  attacks: 4,
+});
 
 const state = loadState();
 
@@ -18,21 +20,28 @@ const partyList = document.querySelector("#party-list");
 const emptyDetail = document.querySelector("#empty-detail");
 const detailPanel = document.querySelector("#character-detail");
 const detailNameInput = document.querySelector("#detail-name");
+const undoLastActionButton = document.querySelector("#undo-last-action");
+const duplicateCharacterButton = document.querySelector("#duplicate-character");
 const editBaseStatsButton = document.querySelector("#edit-base-stats");
 const addStatBlockButton = document.querySelector("#add-stat-block");
 const deleteCharacterButton = document.querySelector("#delete-character");
 const statsGrid = document.querySelector("#stats-grid");
 const characterNotes = document.querySelector("#character-notes");
+const sessionNotes = document.querySelector("#session-notes");
+const clearSessionNotesButton = document.querySelector("#clear-session-notes");
 const ammoList = document.querySelector("#ammo-list");
 const addAmmoForm = document.querySelector("#add-ammo-form");
 const ammoWeaponInput = document.querySelector("#ammo-weapon");
 const ammoMaxInput = document.querySelector("#ammo-max");
 const characterHistory = document.querySelector("#character-history");
 const globalHistory = document.querySelector("#global-history");
+const historyCharacterFilter = document.querySelector("#history-character-filter");
+const historyStatFilter = document.querySelector("#history-stat-filter");
 const exportButton = document.querySelector("#export-data");
 const importTriggerButton = document.querySelector("#import-trigger");
 const importFileInput = document.querySelector("#import-file");
 const resetDataButton = document.querySelector("#reset-data");
+const saveIndicator = document.querySelector("#save-indicator");
 
 const logDialog = document.querySelector("#log-dialog");
 const logDialogForm = document.querySelector("#log-dialog-form");
@@ -41,19 +50,20 @@ const logReasonInput = document.querySelector("#log-reason");
 
 const baseStatsDialog = document.querySelector("#base-stats-dialog");
 const baseStatsForm = document.querySelector("#base-stats-form");
+const baseHpInput = document.querySelector("#base-hp");
 const basePpeInput = document.querySelector("#base-ppe");
 const baseSdcInput = document.querySelector("#base-sdc");
 const baseMdcInput = document.querySelector("#base-mdc");
-const baseHpInput = document.querySelector("#base-hp");
-const baseIspInput = document.querySelector("#base-isp");
 const baseAttacksInput = document.querySelector("#base-attacks");
 const applyBaseToCurrentInput = document.querySelector("#apply-base-to-current");
 
 const partyItemTemplate = document.querySelector("#party-item-template");
 const statRowTemplate = document.querySelector("#stat-row-template");
 const ammoItemTemplate = document.querySelector("#ammo-item-template");
+const historyItemTemplate = document.querySelector("#history-item-template");
 
 let pendingChange = null;
+let saveFlashTimer = null;
 
 function uid() {
   return `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -68,175 +78,140 @@ function clamp(value, min, max) {
 }
 
 function asInt(value, fallback = 0) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isNaN(parsed) ? fallback : parsed;
+  const number = Number.parseInt(value, 10);
+  return Number.isNaN(number) ? fallback : number;
 }
 
-function normalizeReason(reason) {
-  const trimmed = (reason || "").trim();
-  return trimmed || DEFAULT_EMPTY_NOTE;
-}
+function normalizeStatValue(value, fallback) {
+  if (typeof value === "number") {
+    return Math.max(0, asInt(value, fallback));
+  }
 
-function normalizeNumber(value, fallback = 0) {
-  if (typeof value === "number") return Math.max(0, asInt(value, fallback));
-  if (value && typeof value === "object") return Math.max(0, asInt(value.current, fallback));
+  if (value && typeof value === "object") {
+    return Math.max(0, asInt(value.current, fallback));
+  }
+
   return Math.max(0, fallback);
 }
 
-function getCoreConfigByKey(key) {
-  return CORE_STATS.find((entry) => entry.key === key);
+function createDefaultBankValues(source = {}) {
+  return BANK_CURRENCIES.reduce((acc, currency) => {
+    acc[currency] = Math.max(0, asInt(source[currency], 0));
+    return acc;
+  }, {});
 }
 
-function buildCoreStat({ key, title, baseFallback, loggable }, baseSource, currentSource, collapsedSource) {
-  const current = normalizeNumber(currentSource, baseFallback);
-  const base = normalizeNumber(baseSource, current);
+function buildBaseStats(character, defaults) {
+  const currentStats = character.stats || defaults;
+  const existingBase = character.baseStats || {};
+
   return {
-    id: `core-${key.toLowerCase()}`,
-    key,
-    title,
+    hp: normalizeStatValue(existingBase.hp, normalizeStatValue(currentStats.hp, defaults.hp)),
+    ppe: normalizeStatValue(existingBase.ppe, normalizeStatValue(currentStats.ppe, defaults.ppe)),
+    sdc: normalizeStatValue(existingBase.sdc, normalizeStatValue(currentStats.sdc, defaults.sdc)),
+    mdc: normalizeStatValue(existingBase.mdc, normalizeStatValue(currentStats.mdc, defaults.mdc)),
+    attacks: normalizeStatValue(existingBase.attacks, normalizeStatValue(currentStats.attacks, defaults.attacks)),
+  };
+}
+
+function normalizeCustomStat(entry, index) {
+  const type = (entry.type || "custom").toString().trim().toLowerCase();
+  const id = entry.id || uid();
+  const label = (entry.label || entry.title || (type === "bank" ? "Bank" : `Custom ${index + 1}`)).toString().trim() || `Custom ${index + 1}`;
+  const pinned = entry.pinned === true;
+
+  if (type === "bank") {
+    return {
+      id,
+      type: "bank",
+      label,
+      pinned,
+      values: createDefaultBankValues(entry.values || entry.current || {}),
+    };
+  }
+
+  const base = normalizeStatValue(entry.base, normalizeStatValue(entry.current, 0));
+  return {
+    id,
+    type: "custom",
+    label,
+    pinned,
     base,
-    current,
-    collapsed: collapsedSource === true,
-    loggable,
+    current: normalizeStatValue(entry.current, base),
   };
 }
 
-function legacyCurrentForKey(character, key) {
-  const map = {
-    PPE: ["ppe"],
-    SDC: ["sdc"],
-    MDC: ["mdc"],
-    HP: ["hp"],
-    ISP: ["isp"],
-    APM: ["attacks"],
-  };
-
-  const field = map[key]?.[0];
-  if (!field) return 0;
-
-  if (character.stats && !Array.isArray(character.stats)) {
-    return character.stats[field];
-  }
-
-  return 0;
+function coreStatIds() {
+  return CORE_STAT_ORDER.map((key) => `core:${key}`);
 }
 
-function legacyBaseForKey(character, key) {
-  const map = {
-    PPE: ["ppe"],
-    SDC: ["sdc"],
-    MDC: ["mdc"],
-    HP: ["hp"],
-    ISP: ["isp"],
-    APM: ["attacks"],
-  };
+function ensureStatOrder(character) {
+  const existing = Array.isArray(character.statOrder) ? character.statOrder.filter((id) => typeof id === "string") : [];
+  const customIds = character.customStats.map((entry) => `custom:${entry.id}`);
+  const available = [...coreStatIds(), ...customIds];
+  const unique = [];
 
-  const field = map[key]?.[0];
-  if (!field) return 0;
-
-  if (character.baseStats && !Array.isArray(character.baseStats)) {
-    return character.baseStats[field];
-  }
-
-  return legacyCurrentForKey(character, key);
-}
-
-function ensureStatsArray(character) {
-  if (Array.isArray(character.stats)) {
-    character.stats = character.stats.map((stat) => ({
-      id: stat.id || uid(),
-      key: typeof stat.key === "string" ? stat.key : "",
-      title: (stat.title || stat.label || "Stat").toString(),
-      base: normalizeNumber(stat.base, normalizeNumber(stat.current, 0)),
-      current: normalizeNumber(stat.current, normalizeNumber(stat.base, 0)),
-      collapsed: stat.collapsed === true,
-      loggable: stat.loggable !== false,
-    }));
-  } else {
-    const collapsedLegacy = character.collapsedStats && typeof character.collapsedStats === "object" ? character.collapsedStats : {};
-    const migratedCore = CORE_STATS.map((core) => {
-      const legacyCollapseKey = `core:${core.key === "APM" ? "attacks" : core.key.toLowerCase()}`;
-      return buildCoreStat(
-        core,
-        legacyBaseForKey(character, core.key),
-        legacyCurrentForKey(character, core.key),
-        collapsedLegacy[legacyCollapseKey]
-      );
-    });
-
-    const legacyCustom = Array.isArray(character.customStats)
-      ? character.customStats.map((entry, index) => {
-          const id = entry.id || uid();
-          const type = (entry.type || "CUSTOM").toString().trim().toUpperCase() || "CUSTOM";
-          const title = (entry.label || entry.title || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
-          const collapsedKey = `custom:${id}`;
-          return {
-            id,
-            key: type === "CUSTOM" ? "" : type,
-            title,
-            base: normalizeNumber(entry.base, normalizeNumber(entry.current, 0)),
-            current: normalizeNumber(entry.current, normalizeNumber(entry.base, 0)),
-            collapsed: collapsedLegacy[collapsedKey] === true || entry.collapsed === true,
-            loggable: type !== "APM",
-          };
-        })
-      : [];
-
-    character.stats = [...migratedCore, ...legacyCustom];
-  }
-
-  CORE_STATS.forEach((core) => {
-    if (!character.stats.some((stat) => stat.key === core.key)) {
-      character.stats.push(
-        buildCoreStat(
-          core,
-          legacyBaseForKey(character, core.key),
-          legacyCurrentForKey(character, core.key),
-          false
-        )
-      );
+  existing.forEach((id) => {
+    if (available.includes(id) && !unique.includes(id)) {
+      unique.push(id);
     }
   });
 
-  character.stats = character.stats.map((stat) => {
-    const core = getCoreConfigByKey(stat.key);
-    return {
-      ...stat,
-      collapsed: stat.collapsed === true,
-      loggable: core ? core.loggable : stat.loggable !== false,
-      title: core ? core.title : (stat.title || "Stat"),
-      base: normalizeNumber(stat.base, normalizeNumber(stat.current, 0)),
-      current: normalizeNumber(stat.current, normalizeNumber(stat.base, 0)),
-    };
+  available.forEach((id) => {
+    if (!unique.includes(id)) {
+      unique.push(id);
+    }
   });
 
-  character.stats.sort((a, b) => {
-    const aCoreIdx = CORE_STATS.findIndex((core) => core.key === a.key);
-    const bCoreIdx = CORE_STATS.findIndex((core) => core.key === b.key);
-    const aIsCore = aCoreIdx !== -1;
-    const bIsCore = bCoreIdx !== -1;
-    if (aIsCore && bIsCore) return aCoreIdx - bCoreIdx;
-    if (aIsCore) return -1;
-    if (bIsCore) return 1;
-    return 0;
-  });
+  character.statOrder = unique;
+}
+
+function sanitizeHistoryEntry(entry) {
+  entry.id ||= uid();
+  entry.character ||= "Unknown";
+  entry.reason = typeof entry.reason === "string" && entry.reason.trim() ? entry.reason.trim() : "No reason provided";
+  entry.text ||= "Updated";
+  entry.time ||= timestamp();
+  entry.statType = typeof entry.statType === "string" ? entry.statType : "other";
+  if (entry.undo && typeof entry.undo === "object") {
+    entry.undo = entry.undo;
+  } else {
+    delete entry.undo;
+  }
 }
 
 function sanitizeForDisplay(stateToFix) {
   stateToFix.characters.forEach((character) => {
+    const defaults = defaultStats();
     character.id ||= uid();
-    character.name = (character.name || "Unnamed").toString();
-    character.notes = typeof character.notes === "string" ? character.notes : "";
-    if (!Array.isArray(character.history)) character.history = [];
-    character.history.forEach((entry) => {
-      entry.id ||= uid();
-      entry.reason = normalizeReason(entry.reason);
-      entry.time ||= timestamp();
-      entry.text ||= "Updated stat";
-      entry.character ||= character.name;
-    });
+    character.name = typeof character.name === "string" && character.name.trim() ? character.name : "Unnamed";
+    character.stats ||= defaults;
 
-    if (!Array.isArray(character.ammo)) character.ammo = [];
+    character.stats = {
+      hp: normalizeStatValue(character.stats.hp, defaults.hp),
+      ppe: normalizeStatValue(character.stats.ppe, defaults.ppe),
+      sdc: normalizeStatValue(character.stats.sdc, defaults.sdc),
+      mdc: normalizeStatValue(character.stats.mdc, defaults.mdc),
+      attacks: normalizeStatValue(character.stats.attacks, defaults.attacks),
+    };
+
+    character.baseStats = buildBaseStats(character, defaults);
+    character.notes = typeof character.notes === "string" ? character.notes : "";
+    character.sessionNotes = typeof character.sessionNotes === "string" ? character.sessionNotes : "";
+    character.historyFilters = {
+      character: character.historyFilters?.character || DEFAULT_HISTORY_FILTERS.character,
+      stat: character.historyFilters?.stat || DEFAULT_HISTORY_FILTERS.stat,
+    };
+
+    if (!Array.isArray(character.customStats)) {
+      character.customStats = [];
+    }
+    character.customStats = character.customStats.map(normalizeCustomStat);
+
+    if (!Array.isArray(character.ammo)) {
+      character.ammo = [];
+    }
+
     character.ammo.forEach((entry) => {
       entry.id ||= uid();
       entry.weapon = (entry.weapon || "Weapon").toString();
@@ -244,38 +219,58 @@ function sanitizeForDisplay(stateToFix) {
       entry.current = clamp(asInt(entry.current, entry.max), 0, entry.max);
     });
 
-    ensureStatsArray(character);
+    if (!Array.isArray(character.history)) {
+      character.history = [];
+    }
+    character.history.forEach(sanitizeHistoryEntry);
 
-    delete character.baseStats;
-    delete character.customStats;
-    delete character.collapsedStats;
+    ensureStatOrder(character);
   });
 
-  if (!Array.isArray(stateToFix.history)) stateToFix.history = [];
-  stateToFix.history.forEach((entry) => {
-    entry.id ||= uid();
-    entry.reason = normalizeReason(entry.reason);
-    entry.time ||= timestamp();
-    entry.text ||= "Updated stat";
-    entry.character ||= "Unknown";
-  });
+  if (!Array.isArray(stateToFix.history)) {
+    stateToFix.history = [];
+  }
+  stateToFix.history.forEach(sanitizeHistoryEntry);
+
+  stateToFix.historyFilters = {
+    character: stateToFix.historyFilters?.character || DEFAULT_HISTORY_FILTERS.character,
+    stat: stateToFix.historyFilters?.stat || DEFAULT_HISTORY_FILTERS.stat,
+  };
+}
+
+function flashSaved() {
+  saveIndicator.textContent = `Saved ${new Date().toLocaleTimeString()}`;
+  saveIndicator.classList.add("is-visible");
+  window.clearTimeout(saveFlashTimer);
+  saveFlashTimer = window.setTimeout(() => {
+    saveIndicator.classList.remove("is-visible");
+  }, SAVE_FLASH_MS);
+}
+
+function saveState(shouldFlash = true) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (shouldFlash) {
+    flashSaved();
+  }
 }
 
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { characters: [], selectedCharacterId: null, history: [] };
+    if (!raw) {
+      return { characters: [], selectedCharacterId: null, history: [], historyFilters: { ...DEFAULT_HISTORY_FILTERS } };
+    }
+
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed.characters) || !Array.isArray(parsed.history)) throw new Error("Invalid state");
+    if (!Array.isArray(parsed.characters) || !Array.isArray(parsed.history)) {
+      throw new Error("Invalid state");
+    }
+
     sanitizeForDisplay(parsed);
     return parsed;
   } catch {
-    return { characters: [], selectedCharacterId: null, history: [] };
+    return { characters: [], selectedCharacterId: null, history: [], historyFilters: { ...DEFAULT_HISTORY_FILTERS } };
   }
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function selectedCharacter() {
@@ -283,30 +278,102 @@ function selectedCharacter() {
 }
 
 function createCharacter(name, baseStats) {
-  const coreStats = CORE_STATS.map((core) =>
-    buildCoreStat(
-      core,
-      baseStats[core.key] ?? core.baseFallback,
-      baseStats[core.key] ?? core.baseFallback,
-      false
-    )
-  );
-
   return {
     id: uid(),
     name,
+    stats: { ...baseStats },
+    baseStats: { ...baseStats },
     notes: "",
-    history: [],
-    stats: coreStats,
+    sessionNotes: "",
     ammo: [],
+    customStats: [],
+    statOrder: coreStatIds(),
+    history: [],
   };
 }
 
-function getCharacterStat(character, key) {
-  return character.stats.find((stat) => stat.key === key);
+function duplicateCharacter(sourceCharacter) {
+  const duplicate = JSON.parse(JSON.stringify(sourceCharacter));
+  duplicate.id = uid();
+  duplicate.name = `${sourceCharacter.name} Copy`;
+  duplicate.ammo = duplicate.ammo.map((entry) => ({ ...entry, id: uid() }));
+  duplicate.customStats = duplicate.customStats.map((entry) => ({ ...entry, id: uid() }));
+  duplicate.statOrder = [];
+  duplicate.history = [];
+  ensureStatOrder(duplicate);
+  return duplicate;
+}
+
+function getCoreStatLabel(key) {
+  const labels = {
+    hp: "HP",
+    ppe: "PPE",
+    sdc: "SDC",
+    mdc: "MDC",
+    attacks: "Attacks per Melee",
+  };
+  return labels[key] || key.toUpperCase();
+}
+
+function getCoreStatSummary(character) {
+  return `HP ${character.stats.hp} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc} • PPE ${character.stats.ppe}`;
+}
+
+function getStatTypeOptions() {
+  const base = [
+    { value: "all", label: "All stats" },
+    { value: "hp", label: "HP" },
+    { value: "ppe", label: "PPE" },
+    { value: "sdc", label: "SDC" },
+    { value: "mdc", label: "MDC" },
+    { value: "attacks", label: "Attacks" },
+    { value: "bank", label: "Bank" },
+    { value: "ammo", label: "Ammo" },
+  ];
+
+  const customLabels = [];
+  state.characters.forEach((character) => {
+    character.customStats.forEach((entry) => {
+      if (entry.type === "custom" && !customLabels.some((item) => item.value === `custom:${entry.label}`)) {
+        customLabels.push({ value: `custom:${entry.label}`, label: entry.label });
+      }
+    });
+  });
+
+  return [...base, ...customLabels];
+}
+
+function populateHistoryFilters() {
+  const currentCharacter = state.historyFilters.character;
+  const currentStat = state.historyFilters.stat;
+
+  historyCharacterFilter.innerHTML = "";
+  historyStatFilter.innerHTML = "";
+
+  [{ value: "all", label: "All characters" }, ...state.characters.map((character) => ({ value: character.id, label: character.name }))].forEach((optionData) => {
+    const option = document.createElement("option");
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    historyCharacterFilter.append(option);
+  });
+
+  getStatTypeOptions().forEach((optionData) => {
+    const option = document.createElement("option");
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    historyStatFilter.append(option);
+  });
+
+  historyCharacterFilter.value = [...historyCharacterFilter.options].some((option) => option.value === currentCharacter)
+    ? currentCharacter
+    : "all";
+  historyStatFilter.value = [...historyStatFilter.options].some((option) => option.value === currentStat)
+    ? currentStat
+    : "all";
 }
 
 function render() {
+  populateHistoryFilters();
   renderPartyList();
   renderDetail();
   renderGlobalHistory();
@@ -323,19 +390,90 @@ function renderPartyList() {
     openButton.textContent = character.name;
     openButton.addEventListener("click", () => {
       state.selectedCharacterId = character.id;
-      saveState();
+      saveState(false);
       render();
     });
 
-    const ppe = getCharacterStat(character, "PPE")?.current ?? 0;
-    const sdc = getCharacterStat(character, "SDC")?.current ?? 0;
-    const mdc = getCharacterStat(character, "MDC")?.current ?? 0;
-    const hp = getCharacterStat(character, "HP")?.current ?? 0;
-    const isp = getCharacterStat(character, "ISP")?.current ?? 0;
-
-    meta.textContent = `PPE ${ppe} • SDC ${sdc} • MDC ${mdc} • HP ${hp} • ISP ${isp}`;
+    meta.textContent = getCoreStatSummary(character);
     partyList.append(fragment);
   });
+}
+
+function buildOrderedStatBlocks(character) {
+  const blocks = character.statOrder
+    .map((id) => {
+      if (id.startsWith("core:")) {
+        const key = id.slice(5);
+        return {
+          id,
+          orderId: id,
+          pinned: false,
+          type: "core",
+          statKey: key,
+          label: getCoreStatLabel(key),
+        };
+      }
+
+      const customId = id.slice(7);
+      const customStat = character.customStats.find((entry) => entry.id === customId);
+      if (!customStat) {
+        return null;
+      }
+
+      return {
+        id,
+        orderId: id,
+        pinned: customStat.pinned === true,
+        type: customStat.type,
+        customStat,
+        label: customStat.label,
+      };
+    })
+    .filter(Boolean);
+
+  return blocks.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+}
+
+function renderDetail() {
+  const character = selectedCharacter();
+  if (!character) {
+    emptyDetail.hidden = false;
+    detailPanel.hidden = true;
+    return;
+  }
+
+  emptyDetail.hidden = true;
+  detailPanel.hidden = false;
+
+  detailNameInput.value = character.name;
+  characterNotes.value = character.notes;
+  sessionNotes.value = character.sessionNotes;
+  undoLastActionButton.disabled = !getLastUndoableEntry(character);
+  renderStats(character);
+  renderAmmo(character);
+  renderCharacterHistory(character);
+}
+
+function getLastUndoableEntry(character) {
+  return character.history.find((entry) => entry.undo && !entry.undoneAt) || null;
+}
+
+function recordHistory(character, entry) {
+  const historyEntry = {
+    id: uid(),
+    character: character.name,
+    time: timestamp(),
+    reason: entry.reason || "No reason provided",
+    text: entry.text,
+    delta: entry.delta ?? null,
+    statType: entry.statType || "other",
+    undo: entry.undo,
+  };
+
+  character.history.unshift(historyEntry);
+  state.history.unshift(historyEntry);
+  saveState();
+  render();
 }
 
 function queueChange(change) {
@@ -346,55 +484,131 @@ function queueChange(change) {
   logReasonInput.focus();
 }
 
-function pushHistory(character, text, reason, delta = null) {
-  const entry = {
-    id: uid(),
-    character: character.name,
-    text,
-    reason: normalizeReason(reason),
-    delta,
-    time: timestamp(),
-  };
+function moveStatBlock(character, orderId, direction) {
+  const index = character.statOrder.indexOf(orderId);
+  if (index === -1) {
+    return;
+  }
 
-  character.history.unshift(entry);
-  state.history.unshift(entry);
-  saveState();
-  render();
-}
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= character.statOrder.length) {
+    return;
+  }
 
-function applyDelta(character, stat, delta, optionalReason = "") {
-  const before = stat.current;
-  stat.current = Math.max(0, stat.current + delta);
-  const appliedDelta = stat.current - before;
-  pushHistory(character, `${stat.title} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${stat.current})`, optionalReason, appliedDelta);
-}
-
-function resetToBase(character, stat) {
-  const before = stat.current;
-  stat.current = stat.base;
-  const delta = stat.current - before;
-  pushHistory(character, `${stat.title} reset to base (${stat.current})`, "Reset to base", delta);
-}
-
-function toggleCollapse(character, stat) {
-  stat.collapsed = !stat.collapsed;
+  const [entry] = character.statOrder.splice(index, 1);
+  character.statOrder.splice(targetIndex, 0, entry);
   saveState();
   renderStats(character);
 }
 
-function deleteStat(character, stat) {
-  const isCore = CORE_STATS.some((core) => core.key === stat.key);
-  if (isCore) return;
+function deleteCustomStat(character, customStat) {
+  const confirmed = window.confirm(`Delete stat block "${customStat.label}"?`);
+  if (!confirmed) {
+    return;
+  }
 
-  const confirmed = window.confirm(`Delete stat block "${stat.title}"?`);
-  if (!confirmed) return;
+  character.customStats = character.customStats.filter((entry) => entry.id !== customStat.id);
+  character.statOrder = character.statOrder.filter((id) => id !== `custom:${customStat.id}`);
+  recordHistory(character, {
+    text: `Deleted stat block: ${customStat.label}`,
+    statType: customStat.type === "bank" ? "bank" : `custom:${customStat.label}`,
+    reason: "System",
+  });
+}
 
-  character.stats = character.stats.filter((entry) => entry.id !== stat.id);
-  pushHistory(character, `Deleted stat block: ${stat.title}`, "", 0);
+function applyStatChange(character, statKey, label, delta, reason) {
+  const before = character.stats[statKey];
+  character.stats[statKey] = Math.max(0, before + delta);
+  const appliedDelta = character.stats[statKey] - before;
+  recordHistory(character, {
+    text: `${label} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${character.stats[statKey]})`,
+    delta: appliedDelta,
+    statType: statKey,
+    reason,
+    undo: {
+      kind: "core-stat",
+      statKey,
+      previousValue: before,
+      nextValue: character.stats[statKey],
+    },
+  });
+}
+
+function resetStatToBase(character, statKey, label) {
+  const before = character.stats[statKey];
+  const next = character.baseStats[statKey];
+  character.stats[statKey] = next;
+  recordHistory(character, {
+    text: `${label} reset to base (${next})`,
+    delta: next - before,
+    statType: statKey,
+    reason: "Reset to base",
+    undo: {
+      kind: "core-stat",
+      statKey,
+      previousValue: before,
+      nextValue: next,
+    },
+  });
+}
+
+function applyCustomStatChange(character, customStat, delta, reason) {
+  const before = customStat.current;
+  customStat.current = Math.max(0, before + delta);
+  const appliedDelta = customStat.current - before;
+  recordHistory(character, {
+    text: `${customStat.label} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${customStat.current})`,
+    delta: appliedDelta,
+    statType: `custom:${customStat.label}`,
+    reason,
+    undo: {
+      kind: "custom-stat",
+      statId: customStat.id,
+      previousValue: before,
+      nextValue: customStat.current,
+    },
+  });
+}
+
+function resetCustomStat(character, customStat) {
+  const before = customStat.current;
+  customStat.current = customStat.base;
+  recordHistory(character, {
+    text: `${customStat.label} reset to base (${customStat.current})`,
+    delta: customStat.current - before,
+    statType: `custom:${customStat.label}`,
+    reason: "Reset to base",
+    undo: {
+      kind: "custom-stat",
+      statId: customStat.id,
+      previousValue: before,
+      nextValue: customStat.current,
+    },
+  });
+}
+
+function applyBankChange(character, bankStat, currency, delta, reason) {
+  const before = bankStat.values[currency];
+  bankStat.values[currency] = Math.max(0, before + delta);
+  const appliedDelta = bankStat.values[currency] - before;
+  recordHistory(character, {
+    text: `${bankStat.label}: ${currency} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${bankStat.values[currency]})`,
+    delta: appliedDelta,
+    statType: "bank",
+    reason,
+    undo: {
+      kind: "bank",
+      statId: bankStat.id,
+      currency,
+      previousValue: before,
+      nextValue: bankStat.values[currency],
+    },
+  });
 }
 
 function wireCustomAdjustment({ customAmountInput, onApply }) {
   const customButtons = customAmountInput.closest(".custom-controls").querySelectorAll("button[data-custom-action]");
+
   customButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const amount = Math.max(1, asInt(customAmountInput.value, 1));
@@ -405,81 +619,165 @@ function wireCustomAdjustment({ customAmountInput, onApply }) {
   });
 }
 
+function buildBankControls(character, bankStat, bankGrid) {
+  BANK_CURRENCIES.forEach((currency) => {
+    const wrapper = document.createElement("section");
+    wrapper.className = "bank-currency";
+
+    const title = document.createElement("strong");
+    title.textContent = currency.charAt(0).toUpperCase() + currency.slice(1);
+
+    const value = document.createElement("span");
+    value.className = "bank-value";
+    value.textContent = `${bankStat.values[currency]}`;
+
+    const controls = document.createElement("div");
+    controls.className = "bank-controls";
+
+    [-10, -1, 1, 10].forEach((delta) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = delta < 0 ? "secondary" : "";
+      button.textContent = `${delta > 0 ? "+" : ""}${delta}`;
+      button.addEventListener("click", () => {
+        queueChange({
+          context: `${character.name}: ${bankStat.label} ${currency} ${delta > 0 ? "+" : ""}${delta}`,
+          apply: (reason) => {
+            applyBankChange(character, bankStat, currency, delta, reason);
+          },
+        });
+      });
+      controls.append(button);
+    });
+
+    wrapper.append(title, value, controls);
+    bankGrid.append(wrapper);
+  });
+}
+
 function renderStats(character) {
   statsGrid.innerHTML = "";
+  const orderedBlocks = buildOrderedStatBlocks(character);
 
-  character.stats.forEach((stat) => {
+  orderedBlocks.forEach((block, visualIndex) => {
     const fragment = statRowTemplate.content.cloneNode(true);
     const label = fragment.querySelector(".stat-label");
     const headerValue = fragment.querySelector(".stat-header-value");
     const value = fragment.querySelector(".stat-value");
-    const body = fragment.querySelector(".stat-body");
-    const toggleButton = fragment.querySelector(".toggle-stat");
+    const defaultBody = fragment.querySelector(".default-stat-body");
+    const bankBody = fragment.querySelector(".bank-stat-body");
+    const bankGrid = fragment.querySelector(".bank-grid");
     const quickButtons = fragment.querySelectorAll(".quick-controls button[data-delta]");
-    const deleteButton = fragment.querySelector(".delete-stat-block");
     const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
+    const pinButton = fragment.querySelector(".pin-stat");
+    const moveUpButton = fragment.querySelector(".move-stat-up");
+    const moveDownButton = fragment.querySelector(".move-stat-down");
+    const deleteButton = fragment.querySelector(".delete-stat-block");
 
-    label.textContent = stat.title;
-    headerValue.textContent = `${stat.current}`;
-    value.textContent = `${stat.current} (Base ${stat.base})`;
+    label.textContent = block.label;
+    pinButton.textContent = block.pinned ? "★" : "☆";
+    pinButton.title = block.pinned ? "Unpin stat" : "Pin stat";
+    pinButton.disabled = block.type === "core";
 
-    body.hidden = stat.collapsed === true;
-    toggleButton.textContent = stat.collapsed ? "▸" : "▾";
-    toggleButton.addEventListener("click", () => {
-      toggleCollapse(character, stat);
-    });
+    moveUpButton.disabled = visualIndex === 0;
+    moveDownButton.disabled = visualIndex === orderedBlocks.length - 1;
+    moveUpButton.addEventListener("click", () => moveStatBlock(character, block.orderId, -1));
+    moveDownButton.addEventListener("click", () => moveStatBlock(character, block.orderId, 1));
 
-    const isCore = CORE_STATS.some((core) => core.key === stat.key);
-    deleteButton.hidden = isCore;
-    deleteButton.addEventListener("click", () => {
-      deleteStat(character, stat);
-    });
-
-    quickButtons.forEach((button) => {
-      const buttonDelta = asInt(button.dataset.delta, 0);
-      if (stat.key === "APM" && Math.abs(buttonDelta) === 5) {
-        button.hidden = true;
+    pinButton.addEventListener("click", () => {
+      if (!block.customStat) {
         return;
       }
+      block.customStat.pinned = !block.customStat.pinned;
+      saveState();
+      renderStats(character);
+    });
 
-      button.addEventListener("click", () => {
-        const context = `${character.name}: ${stat.title} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`;
-        if (stat.loggable === false) {
-          applyDelta(character, stat, buttonDelta, "");
+    if (block.type === "core") {
+      const statKey = block.statKey;
+      const statLabel = getCoreStatLabel(statKey);
+      headerValue.textContent = `${character.stats[statKey]}`;
+      value.textContent = `${character.stats[statKey]} (Base ${character.baseStats[statKey]})`;
+      deleteButton.hidden = true;
+
+      quickButtons.forEach((button) => {
+        const buttonDelta = asInt(button.dataset.delta, 0);
+        if (statKey === "attacks" && Math.abs(buttonDelta) === 5) {
+          button.hidden = true;
           return;
         }
 
-        queueChange({
-          context,
-          apply: (reason) => {
-            applyDelta(character, stat, buttonDelta, reason);
-          },
+        button.addEventListener("click", () => {
+          queueChange({
+            context: `${character.name}: ${statLabel} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`,
+            apply: (reason) => {
+              applyStatChange(character, statKey, statLabel, buttonDelta, reason);
+            },
+          });
         });
       });
-    });
 
-    resetButton.addEventListener("click", () => {
-      resetToBase(character, stat);
-    });
+      resetButton.addEventListener("click", () => {
+        resetStatToBase(character, statKey, statLabel);
+      });
 
-    wireCustomAdjustment({
-      customAmountInput,
-      onApply: (delta) => {
-        const context = `${character.name}: ${stat.title} custom ${delta >= 0 ? "+" : ""}${delta}`;
-        if (stat.loggable === false) {
-          applyDelta(character, stat, delta, "");
-          return;
-        }
+      wireCustomAdjustment({
+        customAmountInput,
+        onApply: (delta) => {
+          queueChange({
+            context: `${character.name}: ${statLabel} custom ${delta >= 0 ? "+" : ""}${delta}`,
+            apply: (reason) => {
+              applyStatChange(character, statKey, statLabel, delta, reason);
+            },
+          });
+        },
+      });
+    } else if (block.type === "bank") {
+      defaultBody.hidden = true;
+      bankBody.hidden = false;
+      headerValue.textContent = "Currencies";
+      deleteButton.hidden = false;
+      deleteButton.addEventListener("click", () => {
+        deleteCustomStat(character, block.customStat);
+      });
+      buildBankControls(character, block.customStat, bankGrid);
+    } else {
+      headerValue.textContent = `${block.customStat.current}`;
+      value.textContent = `${block.customStat.current} (Base ${block.customStat.base})`;
+      deleteButton.hidden = false;
+      deleteButton.addEventListener("click", () => {
+        deleteCustomStat(character, block.customStat);
+      });
 
-        queueChange({
-          context,
-          apply: (reason) => {
-            applyDelta(character, stat, delta, reason);
-          },
+      quickButtons.forEach((button) => {
+        const buttonDelta = asInt(button.dataset.delta, 0);
+        button.addEventListener("click", () => {
+          queueChange({
+            context: `${character.name}: ${block.customStat.label} ${buttonDelta >= 0 ? "+" : ""}${buttonDelta}`,
+            apply: (reason) => {
+              applyCustomStatChange(character, block.customStat, buttonDelta, reason);
+            },
+          });
         });
-      },
-    });
+      });
+
+      resetButton.addEventListener("click", () => {
+        resetCustomStat(character, block.customStat);
+      });
+
+      wireCustomAdjustment({
+        customAmountInput,
+        onApply: (delta) => {
+          queueChange({
+            context: `${character.name}: ${block.customStat.label} custom ${delta >= 0 ? "+" : ""}${delta}`,
+            apply: (reason) => {
+              applyCustomStatChange(character, block.customStat, delta, reason);
+            },
+          });
+        },
+      });
+    }
 
     statsGrid.append(fragment);
   });
@@ -509,12 +807,12 @@ function renderAmmo(character) {
             const before = ammo.current;
             ammo.current = clamp(ammo.current + delta, 0, ammo.max);
             const appliedDelta = ammo.current - before;
-            pushHistory(
-              character,
-              `Ammo (${ammo.weapon}) ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${ammo.current}/${ammo.max})`,
+            recordHistory(character, {
+              text: `Ammo (${ammo.weapon}) ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${ammo.current}/${ammo.max})`,
+              delta: appliedDelta,
+              statType: "ammo",
               reason,
-              appliedDelta
-            );
+            });
           },
         });
       });
@@ -529,12 +827,12 @@ function renderAmmo(character) {
             const before = ammo.current;
             ammo.current = clamp(ammo.current + delta, 0, ammo.max);
             const appliedDelta = ammo.current - before;
-            pushHistory(
-              character,
-              `Ammo (${ammo.weapon}) ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${ammo.current}/${ammo.max})`,
+            recordHistory(character, {
+              text: `Ammo (${ammo.weapon}) ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${ammo.current}/${ammo.max})`,
+              delta: appliedDelta,
+              statType: "ammo",
               reason,
-              appliedDelta
-            );
+            });
           },
         });
       },
@@ -546,162 +844,128 @@ function renderAmmo(character) {
         apply: (reason) => {
           const before = ammo.current;
           ammo.current = ammo.max;
-          pushHistory(character, `Ammo (${ammo.weapon}) reloaded (${ammo.current}/${ammo.max})`, reason, ammo.current - before);
+          recordHistory(character, {
+            text: `Ammo (${ammo.weapon}) reloaded (${ammo.current}/${ammo.max})`,
+            delta: ammo.current - before,
+            statType: "ammo",
+            reason,
+          });
         },
       });
     });
 
     removeButton.addEventListener("click", () => {
       const confirmed = window.confirm(`Remove ammo tracker for ${ammo.weapon}?`);
-      if (!confirmed) return;
+      if (!confirmed) {
+        return;
+      }
       character.ammo = character.ammo.filter((entry) => entry.id !== ammo.id);
-      pushHistory(character, `Removed ammo tracker: ${ammo.weapon}`, "System");
+      recordHistory(character, {
+        text: `Removed ammo tracker: ${ammo.weapon}`,
+        statType: "ammo",
+        reason: "System",
+      });
     });
 
     ammoList.append(fragment);
   });
 }
 
-function setHistoryReason(character, entryId, reason) {
-  const updatedReason = normalizeReason(reason);
-  const characterEntry = character.history.find((entry) => entry.id === entryId);
-  if (characterEntry) characterEntry.reason = updatedReason;
-
-  const globalEntry = state.history.find((entry) => entry.id === entryId);
-  if (globalEntry) globalEntry.reason = updatedReason;
-
-  saveState();
-  renderCharacterHistory(character);
-  renderGlobalHistory();
-}
-
 function renderCharacterHistory(character) {
   characterHistory.innerHTML = "";
 
   character.history.slice(0, 50).forEach((entry) => {
-    const li = document.createElement("li");
-
-    const line = document.createElement("p");
-    line.className = "history-line";
-    line.textContent = `[${entry.time}] ${entry.text} — ${normalizeReason(entry.reason)}`;
-
-    const controls = document.createElement("div");
-    controls.className = "history-edit-controls";
-
-    const editButton = document.createElement("button");
-    editButton.type = "button";
-    editButton.className = "secondary";
-    editButton.textContent = "Edit";
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "history-edit-input";
-    input.value = normalizeReason(entry.reason) === DEFAULT_EMPTY_NOTE ? "" : normalizeReason(entry.reason);
-    input.hidden = true;
-
-    const saveButton = document.createElement("button");
-    saveButton.type = "button";
-    saveButton.textContent = "Save";
-    saveButton.hidden = true;
-
-    const cancelButton = document.createElement("button");
-    cancelButton.type = "button";
-    cancelButton.className = "secondary";
-    cancelButton.textContent = "Cancel";
-    cancelButton.hidden = true;
-
-    editButton.addEventListener("click", () => {
-      editButton.hidden = true;
-      input.hidden = false;
-      saveButton.hidden = false;
-      cancelButton.hidden = false;
-      input.focus();
-    });
-
-    saveButton.addEventListener("click", () => {
-      setHistoryReason(character, entry.id, input.value);
-    });
-
-    cancelButton.addEventListener("click", () => {
-      input.value = normalizeReason(entry.reason) === DEFAULT_EMPTY_NOTE ? "" : normalizeReason(entry.reason);
-      input.hidden = true;
-      saveButton.hidden = true;
-      cancelButton.hidden = true;
-      editButton.hidden = false;
-    });
-
-    controls.append(editButton, input, saveButton, cancelButton);
-    li.append(line, controls);
-    characterHistory.append(li);
+    const fragment = historyItemTemplate.content.cloneNode(true);
+    fragment.querySelector(".history-line").textContent = `[${entry.time}] ${entry.text} — ${entry.reason}`;
+    characterHistory.append(fragment);
   });
 }
 
 function renderGlobalHistory() {
   globalHistory.innerHTML = "";
 
-  state.history.slice(0, 100).forEach((entry) => {
-    const li = document.createElement("li");
-    const line = document.createElement("p");
-    line.className = "history-line";
-    line.textContent = `[${entry.time}] ${entry.character}: ${entry.text} — ${normalizeReason(entry.reason)}`;
-    li.append(line);
-    globalHistory.append(li);
-  });
+  state.history
+    .filter((entry) => {
+      const matchesCharacter = state.historyFilters.character === "all" || state.characters.find((character) => character.id === state.historyFilters.character)?.name === entry.character;
+      const matchesStat = state.historyFilters.stat === "all" || entry.statType === state.historyFilters.stat;
+      return matchesCharacter && matchesStat;
+    })
+    .slice(0, 100)
+    .forEach((entry) => {
+      const fragment = historyItemTemplate.content.cloneNode(true);
+      fragment.querySelector(".history-line").textContent = `[${entry.time}] ${entry.character}: ${entry.text} — ${entry.reason}`;
+      globalHistory.append(fragment);
+    });
 }
 
-function renderDetail() {
-  const character = selectedCharacter();
-  if (!character) {
-    emptyDetail.hidden = false;
-    detailPanel.hidden = true;
+function promptForBaseStats(seed = defaultStats()) {
+  const hp = window.prompt("Base HP", `${seed.hp}`);
+  if (hp === null) return null;
+
+  const ppe = window.prompt("Base PPE", `${seed.ppe}`);
+  if (ppe === null) return null;
+
+  const sdc = window.prompt("Base SDC", `${seed.sdc}`);
+  if (sdc === null) return null;
+
+  const mdc = window.prompt("Base MDC", `${seed.mdc}`);
+  if (mdc === null) return null;
+
+  const attacks = window.prompt("Base Attacks per melee", `${seed.attacks}`);
+  if (attacks === null) return null;
+
+  return {
+    hp: Math.max(0, asInt(hp, seed.hp)),
+    ppe: Math.max(0, asInt(ppe, seed.ppe)),
+    sdc: Math.max(0, asInt(sdc, seed.sdc)),
+    mdc: Math.max(0, asInt(mdc, seed.mdc)),
+    attacks: Math.max(0, asInt(attacks, seed.attacks)),
+  };
+}
+
+function runUndo(character) {
+  const entry = getLastUndoableEntry(character);
+  if (!entry) {
     return;
   }
 
-  emptyDetail.hidden = true;
-  detailPanel.hidden = false;
-  detailNameInput.value = character.name;
-  characterNotes.value = character.notes;
-  renderStats(character);
-  renderAmmo(character);
-  renderCharacterHistory(character);
-}
+  if (entry.undo.kind === "core-stat") {
+    character.stats[entry.undo.statKey] = entry.undo.previousValue;
+  } else if (entry.undo.kind === "custom-stat") {
+    const customStat = character.customStats.find((item) => item.id === entry.undo.statId);
+    if (!customStat) {
+      return;
+    }
+    customStat.current = entry.undo.previousValue;
+  } else if (entry.undo.kind === "bank") {
+    const bankStat = character.customStats.find((item) => item.id === entry.undo.statId && item.type === "bank");
+    if (!bankStat) {
+      return;
+    }
+    bankStat.values[entry.undo.currency] = entry.undo.previousValue;
+  } else {
+    return;
+  }
 
-function promptForBaseStats() {
-  const defaults = CORE_STATS.reduce((acc, core) => {
-    acc[core.key] = core.baseFallback;
-    return acc;
-  }, {});
-
-  const ppe = window.prompt("Base PPE", `${defaults.PPE}`);
-  if (ppe === null) return null;
-  const sdc = window.prompt("Base SDC", `${defaults.SDC}`);
-  if (sdc === null) return null;
-  const mdc = window.prompt("Base MDC", `${defaults.MDC}`);
-  if (mdc === null) return null;
-  const hp = window.prompt("Base HP", `${defaults.HP}`);
-  if (hp === null) return null;
-  const isp = window.prompt("Base ISP", `${defaults.ISP}`);
-  if (isp === null) return null;
-  const apm = window.prompt("Base Attacks per melee", `${defaults.APM}`);
-  if (apm === null) return null;
-
-  return {
-    PPE: Math.max(0, asInt(ppe, defaults.PPE)),
-    SDC: Math.max(0, asInt(sdc, defaults.SDC)),
-    MDC: Math.max(0, asInt(mdc, defaults.MDC)),
-    HP: Math.max(0, asInt(hp, defaults.HP)),
-    ISP: Math.max(0, asInt(isp, defaults.ISP)),
-    APM: Math.max(0, asInt(apm, defaults.APM)),
-  };
+  entry.undoneAt = timestamp();
+  recordHistory(character, {
+    text: `Undid: ${entry.text}`,
+    statType: entry.statType,
+    reason: "Undo",
+  });
 }
 
 addCharacterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const name = newCharacterNameInput.value.trim();
-  if (!name) return;
+  if (!name) {
+    return;
+  }
 
   const baseStats = promptForBaseStats();
-  if (!baseStats) return;
+  if (!baseStats) {
+    return;
+  }
 
   const character = createCharacter(name, baseStats);
   state.characters.push(character);
@@ -713,7 +977,9 @@ addCharacterForm.addEventListener("submit", (event) => {
 
 detailNameInput.addEventListener("change", () => {
   const character = selectedCharacter();
-  if (!character) return;
+  if (!character) {
+    return;
+  }
 
   const nextName = detailNameInput.value.trim();
   if (!nextName) {
@@ -721,45 +987,112 @@ detailNameInput.addEventListener("change", () => {
     return;
   }
 
+  const previousName = character.name;
   character.name = nextName;
+  character.history.forEach((entry) => {
+    if (entry.character === previousName) {
+      entry.character = nextName;
+    }
+  });
+  state.history.forEach((entry) => {
+    if (entry.character === previousName) {
+      entry.character = nextName;
+    }
+  });
   saveState();
   render();
 });
 
 characterNotes.addEventListener("input", () => {
   const character = selectedCharacter();
-  if (!character) return;
+  if (!character) {
+    return;
+  }
+
   character.notes = characterNotes.value;
   saveState();
 });
 
+sessionNotes.addEventListener("input", () => {
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  character.sessionNotes = sessionNotes.value;
+  saveState();
+});
+
+clearSessionNotesButton.addEventListener("click", () => {
+  const character = selectedCharacter();
+  if (!character || !character.sessionNotes) {
+    return;
+  }
+
+  const confirmed = window.confirm("Clear session notes for this character?");
+  if (!confirmed) {
+    return;
+  }
+
+  character.sessionNotes = "";
+  saveState();
+  renderDetail();
+});
+
+undoLastActionButton.addEventListener("click", () => {
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  runUndo(character);
+});
+
+duplicateCharacterButton.addEventListener("click", () => {
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  const duplicate = duplicateCharacter(character);
+  state.characters.push(duplicate);
+  state.selectedCharacterId = duplicate.id;
+  saveState();
+  render();
+});
+
 editBaseStatsButton.addEventListener("click", () => {
   const character = selectedCharacter();
-  if (!character) return;
+  if (!character) {
+    return;
+  }
 
-  basePpeInput.value = getCharacterStat(character, "PPE")?.base ?? 0;
-  baseSdcInput.value = getCharacterStat(character, "SDC")?.base ?? 0;
-  baseMdcInput.value = getCharacterStat(character, "MDC")?.base ?? 0;
-  baseHpInput.value = getCharacterStat(character, "HP")?.base ?? 0;
-  baseIspInput.value = getCharacterStat(character, "ISP")?.base ?? 0;
-  baseAttacksInput.value = getCharacterStat(character, "APM")?.base ?? 0;
+  baseHpInput.value = character.baseStats.hp;
+  basePpeInput.value = character.baseStats.ppe;
+  baseSdcInput.value = character.baseStats.sdc;
+  baseMdcInput.value = character.baseStats.mdc;
+  baseAttacksInput.value = character.baseStats.attacks;
   applyBaseToCurrentInput.checked = false;
   baseStatsDialog.showModal();
 });
 
 addStatBlockButton.addEventListener("click", () => {
   const character = selectedCharacter();
-  if (!character) return;
+  if (!character) {
+    return;
+  }
 
-  const typeInput = window.prompt("Stat type (Custom, PPE, SDC, MDC, HP, ISP, APM)", "Custom");
-  if (typeInput === null) return;
+  const typeInput = window.prompt("Stat type (Custom or Bank)", "Custom");
+  if (typeInput === null) {
+    return;
+  }
 
-  const normalizedType = typeInput.trim().toUpperCase() || "CUSTOM";
-  const allowed = ["CUSTOM", "PPE", "SDC", "MDC", "HP", "ISP", "APM"];
-  const chosenType = allowed.includes(normalizedType) ? normalizedType : "CUSTOM";
-
-  const label = window.prompt("Stat title/label", chosenType === "CUSTOM" ? "Custom Stat" : chosenType);
-  if (label === null) return;
+  const normalizedType = typeInput.trim().toLowerCase();
+  const isBank = normalizedType === "bank";
+  const label = window.prompt("Stat title/label", isBank ? "Bank" : "Custom Stat");
+  if (label === null) {
+    return;
+  }
 
   const cleanLabel = label.trim();
   if (!cleanLabel) {
@@ -767,29 +1100,38 @@ addStatBlockButton.addEventListener("click", () => {
     return;
   }
 
-  const baseInput = window.prompt("Base value", "0");
-  if (baseInput === null) return;
+  const newStat = isBank
+    ? {
+        id: uid(),
+        type: "bank",
+        label: cleanLabel,
+        pinned: false,
+        values: createDefaultBankValues(),
+      }
+    : {
+        id: uid(),
+        type: "custom",
+        label: cleanLabel,
+        pinned: false,
+        base: Math.max(0, asInt(window.prompt("Base value", "0"), 0)),
+        current: 0,
+      };
 
-  const baseValue = Math.max(0, asInt(baseInput, 0));
+  if (!isBank) {
+    newStat.current = newStat.base;
+  }
 
-  const stat = {
-    id: uid(),
-    key: chosenType === "CUSTOM" ? "" : chosenType,
-    title: cleanLabel,
-    base: baseValue,
-    current: baseValue,
-    collapsed: false,
-    loggable: chosenType !== "APM",
-  };
-
-  character.stats.push(stat);
+  character.customStats.push(newStat);
+  character.statOrder.push(`custom:${newStat.id}`);
   saveState();
   render();
 });
 
 baseStatsForm.addEventListener("submit", (event) => {
   const submitButton = event.submitter;
-  if (!submitButton || submitButton.value !== "confirm") return;
+  if (!submitButton || submitButton.value !== "confirm") {
+    return;
+  }
 
   event.preventDefault();
   const character = selectedCharacter();
@@ -799,22 +1141,18 @@ baseStatsForm.addEventListener("submit", (event) => {
   }
 
   const nextBase = {
-    PPE: Math.max(0, asInt(basePpeInput.value, getCharacterStat(character, "PPE")?.base ?? 0)),
-    SDC: Math.max(0, asInt(baseSdcInput.value, getCharacterStat(character, "SDC")?.base ?? 0)),
-    MDC: Math.max(0, asInt(baseMdcInput.value, getCharacterStat(character, "MDC")?.base ?? 0)),
-    HP: Math.max(0, asInt(baseHpInput.value, getCharacterStat(character, "HP")?.base ?? 0)),
-    ISP: Math.max(0, asInt(baseIspInput.value, getCharacterStat(character, "ISP")?.base ?? 0)),
-    APM: Math.max(0, asInt(baseAttacksInput.value, getCharacterStat(character, "APM")?.base ?? 0)),
+    hp: Math.max(0, asInt(baseHpInput.value, character.baseStats.hp)),
+    ppe: Math.max(0, asInt(basePpeInput.value, character.baseStats.ppe)),
+    sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc)),
+    mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc)),
+    attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks)),
   };
 
-  Object.entries(nextBase).forEach(([key, value]) => {
-    const stat = getCharacterStat(character, key);
-    if (!stat) return;
-    stat.base = value;
-    if (applyBaseToCurrentInput.checked) {
-      stat.current = value;
-    }
-  });
+  character.baseStats = nextBase;
+
+  if (applyBaseToCurrentInput.checked) {
+    character.stats = { ...character.stats, ...nextBase };
+  }
 
   saveState();
   render();
@@ -823,10 +1161,14 @@ baseStatsForm.addEventListener("submit", (event) => {
 
 deleteCharacterButton.addEventListener("click", () => {
   const character = selectedCharacter();
-  if (!character) return;
+  if (!character) {
+    return;
+  }
 
   const confirmed = window.confirm(`Delete ${character.name}? This cannot be undone.`);
-  if (!confirmed) return;
+  if (!confirmed) {
+    return;
+  }
 
   state.characters = state.characters.filter((entry) => entry.id !== character.id);
   if (state.selectedCharacterId === character.id) {
@@ -839,14 +1181,22 @@ deleteCharacterButton.addEventListener("click", () => {
 addAmmoForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const character = selectedCharacter();
-  if (!character) return;
+  if (!character) {
+    return;
+  }
 
   const weapon = ammoWeaponInput.value.trim();
   const max = Math.max(1, asInt(ammoMaxInput.value, 1));
-  if (!weapon) return;
+  if (!weapon) {
+    return;
+  }
 
   character.ammo.push({ id: uid(), weapon, current: max, max });
-  pushHistory(character, `Added ammo tracker: ${weapon} (${max}/${max})`, "System");
+  recordHistory(character, {
+    text: `Added ammo tracker: ${weapon} (${max}/${max})`,
+    statType: "ammo",
+    reason: "System",
+  });
   addAmmoForm.reset();
   ammoMaxInput.value = "20";
 });
@@ -864,7 +1214,12 @@ logDialogForm.addEventListener("submit", (event) => {
     return;
   }
 
-  const reason = logReasonInput.value;
+  const reason = logReasonInput.value.trim();
+  if (!reason) {
+    logReasonInput.focus();
+    return;
+  }
+
   pendingChange.apply(reason);
   pendingChange = null;
   logDialog.close();
@@ -887,7 +1242,20 @@ importTriggerButton.addEventListener("click", () => {
 
 importFileInput.addEventListener("change", async () => {
   const file = importFileInput.files?.[0];
-  if (!file) return;
+  if (!file) {
+    return;
+  }
+
+  const wantsBackup = window.confirm("Importing will overwrite current dashboard data. Export a backup first?");
+  if (wantsBackup) {
+    exportButton.click();
+  }
+
+  const confirmed = window.confirm("Continue with import and overwrite current dashboard data?");
+  if (!confirmed) {
+    importFileInput.value = "";
+    return;
+  }
 
   const text = await file.text();
   let parsed;
@@ -895,14 +1263,13 @@ importFileInput.addEventListener("change", async () => {
     parsed = JSON.parse(text);
   } catch {
     window.alert("Invalid JSON file.");
+    importFileInput.value = "";
     return;
   }
 
-  const confirmed = window.confirm("Importing will overwrite current dashboard data. Continue?");
-  if (!confirmed) return;
-
   if (!Array.isArray(parsed.characters) || !Array.isArray(parsed.history)) {
     window.alert("JSON does not match expected dashboard export format.");
+    importFileInput.value = "";
     return;
   }
 
@@ -910,29 +1277,41 @@ importFileInput.addEventListener("change", async () => {
   state.characters = parsed.characters;
   state.selectedCharacterId = parsed.selectedCharacterId || parsed.characters[0]?.id || null;
   state.history = parsed.history;
+  state.historyFilters = parsed.historyFilters || { ...DEFAULT_HISTORY_FILTERS };
   saveState();
   render();
   importFileInput.value = "";
 });
 
 resetDataButton.addEventListener("click", () => {
-  const firstConfirm = window.confirm("This will erase all saved dashboard data. Continue?");
-  if (!firstConfirm) return;
-
   const typed = window.prompt('Type RESET to permanently clear all data.');
-  if (typed !== "RESET") return;
+  if (typed !== "RESET") {
+    return;
+  }
 
   state.characters = [];
   state.selectedCharacterId = null;
   state.history = [];
-  localStorage.removeItem(STORAGE_KEY);
+  state.historyFilters = { ...DEFAULT_HISTORY_FILTERS };
   saveState();
   render();
+});
+
+historyCharacterFilter.addEventListener("change", () => {
+  state.historyFilters.character = historyCharacterFilter.value;
+  saveState(false);
+  renderGlobalHistory();
+});
+
+historyStatFilter.addEventListener("change", () => {
+  state.historyFilters.stat = historyStatFilter.value;
+  saveState(false);
+  renderGlobalHistory();
 });
 
 if (!state.selectedCharacterId && state.characters.length > 0) {
   state.selectedCharacterId = state.characters[0].id;
 }
 
-saveState();
+saveState(false);
 render();
