@@ -233,10 +233,29 @@ select:focus-visible,
   align-items: flex-start;
 }
 
-.pin-stat,
-.move-stat-up,
-.move-stat-down {
-  padding: 0.25rem 0.45rem;
+.stat-drag-handle {
+  cursor: grab;
+}
+
+.drag-indicator {
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding-top: 0.15rem;
+}
+
+.delete-stat-block {
+  min-width: 2.1rem;
+  padding: 0.25rem 0.55rem;
+  line-height: 1;
+}
+
+.stat-row.is-dragging {
+  opacity: 0.55;
+}
+
+.stat-row.drop-target {
+  border-color: var(--accent);
 }
 
 .stat-value {

@@ -118,14 +118,12 @@ function normalizeCustomStat(entry, index) {
   const type = (entry.type || "custom").toString().trim().toLowerCase();
   const id = entry.id || uid();
   const label = (entry.label || entry.title || (type === "bank" ? "Bank" : `Custom ${index + 1}`)).toString().trim() || `Custom ${index + 1}`;
-  const pinned = entry.pinned === true;
 
   if (type === "bank") {
     return {
       id,
       type: "bank",
       label,
-      pinned,
       values: createDefaultBankValues(entry.values || entry.current || {}),
     };
   }
@@ -135,7 +133,6 @@ function normalizeCustomStat(entry, index) {
     id,
     type: "custom",
     label,
-    pinned,
     base,
     current: normalizeStatValue(entry.current, base),
   };
@@ -400,14 +397,13 @@ function renderPartyList() {
 }
 
 function buildOrderedStatBlocks(character) {
-  const blocks = character.statOrder
+  return character.statOrder
     .map((id) => {
       if (id.startsWith("core:")) {
         const key = id.slice(5);
         return {
           id,
           orderId: id,
-          pinned: false,
           type: "core",
           statKey: key,
           label: getCoreStatLabel(key),
@@ -423,15 +419,59 @@ function buildOrderedStatBlocks(character) {
       return {
         id,
         orderId: id,
-        pinned: customStat.pinned === true,
         type: customStat.type,
         customStat,
         label: customStat.label,
       };
     })
     .filter(Boolean);
+}
 
-  return blocks.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+function attachDragReorderHandlers(character, row, orderId) {
+  row.draggable = true;
+
+  row.addEventListener("dragstart", (event) => {
+    row.classList.add("is-dragging");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", orderId);
+  });
+
+  row.addEventListener("dragend", () => {
+    row.classList.remove("is-dragging");
+    statsGrid.querySelectorAll(".stat-row").forEach((item) => item.classList.remove("drop-target"));
+  });
+
+  row.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    statsGrid.querySelectorAll(".stat-row").forEach((item) => item.classList.remove("drop-target"));
+    row.classList.add("drop-target");
+  });
+
+  row.addEventListener("dragleave", () => {
+    row.classList.remove("drop-target");
+  });
+
+  row.addEventListener("drop", (event) => {
+    event.preventDefault();
+    row.classList.remove("drop-target");
+
+    const draggedOrderId = event.dataTransfer.getData("text/plain");
+    if (!draggedOrderId || draggedOrderId === orderId) {
+      return;
+    }
+
+    const fromIndex = character.statOrder.indexOf(draggedOrderId);
+    const toIndex = character.statOrder.indexOf(orderId);
+    if (fromIndex === -1 || toIndex === -1) {
+      return;
+    }
+
+    const [moved] = character.statOrder.splice(fromIndex, 1);
+    character.statOrder.splice(toIndex, 0, moved);
+    saveState();
+    renderStats(character);
+  });
 }
 
 function renderDetail() {
@@ -482,23 +522,6 @@ function queueChange(change) {
   logReasonInput.value = "";
   logDialog.showModal();
   logReasonInput.focus();
-}
-
-function moveStatBlock(character, orderId, direction) {
-  const index = character.statOrder.indexOf(orderId);
-  if (index === -1) {
-    return;
-  }
-
-  const targetIndex = index + direction;
-  if (targetIndex < 0 || targetIndex >= character.statOrder.length) {
-    return;
-  }
-
-  const [entry] = character.statOrder.splice(index, 1);
-  character.statOrder.splice(targetIndex, 0, entry);
-  saveState();
-  renderStats(character);
 }
 
 function deleteCustomStat(character, customStat) {
@@ -659,7 +682,7 @@ function renderStats(character) {
   statsGrid.innerHTML = "";
   const orderedBlocks = buildOrderedStatBlocks(character);
 
-  orderedBlocks.forEach((block, visualIndex) => {
+  orderedBlocks.forEach((block) => {
     const fragment = statRowTemplate.content.cloneNode(true);
     const label = fragment.querySelector(".stat-label");
     const headerValue = fragment.querySelector(".stat-header-value");
@@ -670,29 +693,11 @@ function renderStats(character) {
     const quickButtons = fragment.querySelectorAll(".quick-controls button[data-delta]");
     const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
-    const pinButton = fragment.querySelector(".pin-stat");
-    const moveUpButton = fragment.querySelector(".move-stat-up");
-    const moveDownButton = fragment.querySelector(".move-stat-down");
     const deleteButton = fragment.querySelector(".delete-stat-block");
 
     label.textContent = block.label;
-    pinButton.textContent = block.pinned ? "★" : "☆";
-    pinButton.title = block.pinned ? "Unpin stat" : "Pin stat";
-    pinButton.disabled = block.type === "core";
-
-    moveUpButton.disabled = visualIndex === 0;
-    moveDownButton.disabled = visualIndex === orderedBlocks.length - 1;
-    moveUpButton.addEventListener("click", () => moveStatBlock(character, block.orderId, -1));
-    moveDownButton.addEventListener("click", () => moveStatBlock(character, block.orderId, 1));
-
-    pinButton.addEventListener("click", () => {
-      if (!block.customStat) {
-        return;
-      }
-      block.customStat.pinned = !block.customStat.pinned;
-      saveState();
-      renderStats(character);
-    });
+    const row = fragment.querySelector(".stat-row");
+    attachDragReorderHandlers(character, row, block.orderId);
 
     if (block.type === "core") {
       const statKey = block.statKey;
@@ -1105,14 +1110,12 @@ addStatBlockButton.addEventListener("click", () => {
         id: uid(),
         type: "bank",
         label: cleanLabel,
-        pinned: false,
         values: createDefaultBankValues(),
       }
     : {
         id: uid(),
         type: "custom",
         label: cleanLabel,
-        pinned: false,
         base: Math.max(0, asInt(window.prompt("Base value", "0"), 0)),
         current: 0,
       };
