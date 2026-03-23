@@ -180,17 +180,15 @@
     <template id="stat-row-template">
       <article class="stat-row">
         <div class="stat-top">
-          <div class="stat-main">
-            <button type="button" class="secondary pin-stat" title="Pin stat">☆</button>
+          <div class="stat-main stat-drag-handle" title="Drag to reorder">
+            <span class="drag-indicator" aria-hidden="true">⋮⋮</span>
             <div>
               <h4 class="stat-label"></h4>
               <p class="stat-header-value"></p>
             </div>
           </div>
           <div class="stat-actions">
-            <button type="button" class="secondary move-stat-up" title="Move up">↑</button>
-            <button type="button" class="secondary move-stat-down" title="Move down">↓</button>
-            <button type="button" class="danger delete-stat-block" title="Delete stat block">Remove</button>
+            <button type="button" class="danger delete-stat-block" title="Delete stat block" aria-label="Delete stat block">×</button>
           </div>
         </div>
         <div class="stat-body default-stat-body">
