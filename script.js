@@ -104,14 +104,18 @@ function createDefaultBankValues(source = {}) {
 function buildBaseStats(character, defaults) {
   const currentStats = character.stats || defaults;
   const existingBase = character.baseStats || {};
+  const deletedStatKeys = Array.isArray(character.deletedStatKeys) ? character.deletedStatKeys : [];
+  const baseStats = {};
 
-  return {
-    hp: normalizeStatValue(existingBase.hp, normalizeStatValue(currentStats.hp, defaults.hp)),
-    ppe: normalizeStatValue(existingBase.ppe, normalizeStatValue(currentStats.ppe, defaults.ppe)),
-    sdc: normalizeStatValue(existingBase.sdc, normalizeStatValue(currentStats.sdc, defaults.sdc)),
-    mdc: normalizeStatValue(existingBase.mdc, normalizeStatValue(currentStats.mdc, defaults.mdc)),
-    attacks: normalizeStatValue(existingBase.attacks, normalizeStatValue(currentStats.attacks, defaults.attacks)),
-  };
+  CORE_STAT_ORDER.forEach((key) => {
+    if (deletedStatKeys.includes(key)) {
+      return;
+    }
+
+    baseStats[key] = normalizeStatValue(existingBase[key], normalizeStatValue(currentStats[key], defaults[key]));
+  });
+
+  return baseStats;
 }
 
 function normalizeCustomStat(entry, index) {
@@ -144,8 +148,10 @@ function coreStatIds() {
 
 function ensureStatOrder(character) {
   const existing = Array.isArray(character.statOrder) ? character.statOrder.filter((id) => typeof id === "string") : [];
+  const deletedStatKeys = Array.isArray(character.deletedStatKeys) ? character.deletedStatKeys : [];
   const customIds = character.customStats.map((entry) => `custom:${entry.id}`);
-  const available = [...coreStatIds(), ...customIds];
+  const availableCoreIds = coreStatIds().filter((id) => !deletedStatKeys.includes(id.slice(5)));
+  const available = [...availableCoreIds, ...customIds];
   const unique = [];
 
   existing.forEach((id) => {
@@ -184,13 +190,19 @@ function sanitizeForDisplay(stateToFix) {
     character.name = typeof character.name === "string" && character.name.trim() ? character.name : "Unnamed";
     character.stats ||= defaults;
 
-    character.stats = {
-      hp: normalizeStatValue(character.stats.hp, defaults.hp),
-      ppe: normalizeStatValue(character.stats.ppe, defaults.ppe),
-      sdc: normalizeStatValue(character.stats.sdc, defaults.sdc),
-      mdc: normalizeStatValue(character.stats.mdc, defaults.mdc),
-      attacks: normalizeStatValue(character.stats.attacks, defaults.attacks),
-    };
+    character.deletedStatKeys = Array.isArray(character.deletedStatKeys)
+      ? character.deletedStatKeys.filter((key) => CORE_STAT_ORDER.includes(key))
+      : [];
+
+    const existingStats = character.stats || {};
+    character.stats = {};
+    CORE_STAT_ORDER.forEach((key) => {
+      if (character.deletedStatKeys.includes(key)) {
+        return;
+      }
+
+      character.stats[key] = normalizeStatValue(existingStats[key], defaults[key]);
+    });
 
     character.baseStats = buildBaseStats(character, defaults);
     character.notes = typeof character.notes === "string" ? character.notes : "";
@@ -286,6 +298,7 @@ function createCharacter(name, baseStats) {
     customStats: [],
     statOrder: coreStatIds(),
     history: [],
+    deletedStatKeys: [],
   };
 }
 
@@ -313,7 +326,7 @@ function getCoreStatLabel(key) {
 }
 
 function getCoreStatSummary(character) {
-  return `HP ${character.stats.hp} • SDC ${character.stats.sdc} • MDC ${character.stats.mdc} • PPE ${character.stats.ppe}`;
+  return `HP ${character.stats.hp ?? 0} • SDC ${character.stats.sdc ?? 0} • MDC ${character.stats.mdc ?? 0} • PPE ${character.stats.ppe ?? 0}`;
 }
 
 function getStatTypeOptions() {
@@ -524,17 +537,28 @@ function queueChange(change) {
   logReasonInput.focus();
 }
 
-function deleteCustomStat(character, customStat) {
-  const confirmed = window.confirm(`Delete stat block "${customStat.label}"?`);
+function deleteStatBlock(character, block) {
+  const confirmed = window.confirm(`Delete stat block "${block.label}"?`);
   if (!confirmed) {
     return;
   }
 
-  character.customStats = character.customStats.filter((entry) => entry.id !== customStat.id);
-  character.statOrder = character.statOrder.filter((id) => id !== `custom:${customStat.id}`);
+  if (block.type === "core") {
+    character.deletedStatKeys = Array.isArray(character.deletedStatKeys) ? character.deletedStatKeys : [];
+    if (!character.deletedStatKeys.includes(block.statKey)) {
+      character.deletedStatKeys.push(block.statKey);
+    }
+    delete character.stats[block.statKey];
+    delete character.baseStats[block.statKey];
+    character.statOrder = character.statOrder.filter((id) => id !== block.orderId);
+  } else {
+    character.customStats = character.customStats.filter((entry) => entry.id !== block.customStat.id);
+    character.statOrder = character.statOrder.filter((id) => id !== `custom:${block.customStat.id}`);
+  }
+
   recordHistory(character, {
-    text: `Deleted stat block: ${customStat.label}`,
-    statType: customStat.type === "bank" ? "bank" : `custom:${customStat.label}`,
+    text: `Deleted stat block: ${block.label}`,
+    statType: block.type === "core" ? block.statKey : block.type === "bank" ? "bank" : `custom:${block.label}`,
     reason: "System",
   });
 }
@@ -704,7 +728,10 @@ function renderStats(character) {
       const statLabel = getCoreStatLabel(statKey);
       headerValue.textContent = `${character.stats[statKey]}`;
       value.textContent = `${character.stats[statKey]} (Base ${character.baseStats[statKey]})`;
-      deleteButton.hidden = true;
+      deleteButton.hidden = false;
+      deleteButton.addEventListener("click", () => {
+        deleteStatBlock(character, block);
+      });
 
       quickButtons.forEach((button) => {
         const buttonDelta = asInt(button.dataset.delta, 0);
@@ -744,7 +771,7 @@ function renderStats(character) {
       headerValue.textContent = "Currencies";
       deleteButton.hidden = false;
       deleteButton.addEventListener("click", () => {
-        deleteCustomStat(character, block.customStat);
+        deleteStatBlock(character, block);
       });
       buildBankControls(character, block.customStat, bankGrid);
     } else {
@@ -752,7 +779,7 @@ function renderStats(character) {
       value.textContent = `${block.customStat.current} (Base ${block.customStat.base})`;
       deleteButton.hidden = false;
       deleteButton.addEventListener("click", () => {
-        deleteCustomStat(character, block.customStat);
+        deleteStatBlock(character, block);
       });
 
       quickButtons.forEach((button) => {
@@ -1072,11 +1099,11 @@ editBaseStatsButton.addEventListener("click", () => {
     return;
   }
 
-  baseHpInput.value = character.baseStats.hp;
-  basePpeInput.value = character.baseStats.ppe;
-  baseSdcInput.value = character.baseStats.sdc;
-  baseMdcInput.value = character.baseStats.mdc;
-  baseAttacksInput.value = character.baseStats.attacks;
+  baseHpInput.value = character.baseStats.hp ?? 0;
+  basePpeInput.value = character.baseStats.ppe ?? 0;
+  baseSdcInput.value = character.baseStats.sdc ?? 0;
+  baseMdcInput.value = character.baseStats.mdc ?? 0;
+  baseAttacksInput.value = character.baseStats.attacks ?? 0;
   applyBaseToCurrentInput.checked = false;
   baseStatsDialog.showModal();
 });
@@ -1144,18 +1171,25 @@ baseStatsForm.addEventListener("submit", (event) => {
   }
 
   const nextBase = {
-    hp: Math.max(0, asInt(baseHpInput.value, character.baseStats.hp)),
-    ppe: Math.max(0, asInt(basePpeInput.value, character.baseStats.ppe)),
-    sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc)),
-    mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc)),
-    attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks)),
+    hp: Math.max(0, asInt(baseHpInput.value, character.baseStats.hp ?? 0)),
+    ppe: Math.max(0, asInt(basePpeInput.value, character.baseStats.ppe ?? 0)),
+    sdc: Math.max(0, asInt(baseSdcInput.value, character.baseStats.sdc ?? 0)),
+    mdc: Math.max(0, asInt(baseMdcInput.value, character.baseStats.mdc ?? 0)),
+    attacks: Math.max(0, asInt(baseAttacksInput.value, character.baseStats.attacks ?? 0)),
   };
 
-  character.baseStats = nextBase;
+  character.baseStats = {};
+  CORE_STAT_ORDER.forEach((key) => {
+    if (character.deletedStatKeys?.includes(key)) {
+      delete character.stats[key];
+      return;
+    }
 
-  if (applyBaseToCurrentInput.checked) {
-    character.stats = { ...character.stats, ...nextBase };
-  }
+    character.baseStats[key] = nextBase[key];
+    if (applyBaseToCurrentInput.checked) {
+      character.stats[key] = nextBase[key];
+    }
+  });
 
   saveState();
   render();
