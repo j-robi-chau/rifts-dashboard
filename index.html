@@ -14,6 +14,7 @@
           <p>Track party resources, quick stat changes, and session history in one place.</p>
         </div>
         <div class="topbar-actions" aria-label="Data controls">
+          <p id="save-indicator" class="save-indicator" aria-live="polite">Saved</p>
           <button id="export-data" type="button">Export JSON</button>
           <button id="import-trigger" type="button" class="secondary">Import JSON</button>
           <input id="import-file" type="file" accept="application/json" hidden />
@@ -47,6 +48,8 @@
                 <input id="detail-name" type="text" />
               </label>
               <div class="detail-actions">
+                <button id="undo-last-action" type="button" class="secondary">Undo</button>
+                <button id="duplicate-character" type="button" class="secondary">Duplicate Character</button>
                 <button id="edit-base-stats" type="button" class="secondary">Edit Base Stats</button>
                 <button id="delete-character" type="button" class="danger">Delete Character</button>
               </div>
@@ -58,11 +61,25 @@
             </div>
             <div id="stats-grid" class="stats-grid"></div>
 
-            <h3>Notes</h3>
-            <label>
-              Character notes
-              <textarea id="character-notes" rows="5" placeholder="Freeform notes for this character..."></textarea>
-            </label>
+            <div class="notes-grid">
+              <div>
+                <h3>Character Notes</h3>
+                <label>
+                  Persistent character notes
+                  <textarea id="character-notes" rows="5" placeholder="Freeform notes that persist between sessions..."></textarea>
+                </label>
+              </div>
+              <div>
+                <div class="notes-header">
+                  <h3>Session Notes</h3>
+                  <button id="clear-session-notes" type="button" class="secondary">Clear Session Notes</button>
+                </div>
+                <label>
+                  Session-only notes
+                  <textarea id="session-notes" rows="5" placeholder="Temporary session notes, reminders, and tactical details..."></textarea>
+                </label>
+              </div>
+            </div>
 
             <h3>Ammo Tracker (Optional)</h3>
             <form id="add-ammo-form" class="ammo-form">
@@ -85,7 +102,19 @@
       </section>
 
       <section class="card history-panel" aria-label="Party-wide session history">
-        <h2>Party-wide History</h2>
+        <div class="history-header">
+          <h2>Party-wide History</h2>
+          <div class="history-filters">
+            <label>
+              Character
+              <select id="history-character-filter"></select>
+            </label>
+            <label>
+              Stat Type
+              <select id="history-stat-filter"></select>
+            </label>
+          </div>
+        </div>
         <ul id="global-history" class="history-list"></ul>
       </section>
     </main>
@@ -95,8 +124,8 @@
         <h2>Log Entry</h2>
         <p id="log-dialog-context"></p>
         <label>
-          Reason (optional)
-          <input id="log-reason" type="text" maxlength="120" placeholder="e.g. cast Armor of Ithan" />
+          Why did this change happen?
+          <input id="log-reason" type="text" maxlength="120" placeholder="e.g. cast Armor of Ithan" required />
         </label>
         <menu>
           <button value="cancel" type="submit" class="secondary">Cancel</button>
@@ -109,6 +138,10 @@
       <form method="dialog" id="base-stats-form" class="stack-form">
         <h2>Edit Base Stats</h2>
         <label>
+          Base HP
+          <input id="base-hp" type="number" min="0" required />
+        </label>
+        <label>
           Base PPE
           <input id="base-ppe" type="number" min="0" required />
         </label>
@@ -119,14 +152,6 @@
         <label>
           Base MDC
           <input id="base-mdc" type="number" min="0" required />
-        </label>
-        <label>
-          Base HP
-          <input id="base-hp" type="number" min="0" required />
-        </label>
-        <label>
-          Base ISP
-          <input id="base-isp" type="number" min="0" required />
         </label>
         <label>
           Base Attacks per melee
@@ -156,13 +181,19 @@
       <article class="stat-row">
         <div class="stat-top">
           <div class="stat-main">
-            <button type="button" class="secondary toggle-stat" title="Collapse/expand stat block">▾</button>
-            <h4 class="stat-label"></h4>
-            <span class="stat-header-value"></span>
+            <button type="button" class="secondary pin-stat" title="Pin stat">☆</button>
+            <div>
+              <h4 class="stat-label"></h4>
+              <p class="stat-header-value"></p>
+            </div>
           </div>
-          <button type="button" class="danger delete-stat-block" title="Delete stat block">-</button>
+          <div class="stat-actions">
+            <button type="button" class="secondary move-stat-up" title="Move up">↑</button>
+            <button type="button" class="secondary move-stat-down" title="Move down">↓</button>
+            <button type="button" class="danger delete-stat-block" title="Delete stat block">Remove</button>
+          </div>
         </div>
-        <div class="stat-body">
+        <div class="stat-body default-stat-body">
           <p class="stat-value"></p>
           <div class="quick-controls">
             <button type="button" data-delta="-5">-5</button>
@@ -179,6 +210,9 @@
             <button type="button" data-custom-action="subtract" class="secondary">-</button>
             <button type="button" data-custom-action="add">+</button>
           </div>
+        </div>
+        <div class="stat-body bank-stat-body" hidden>
+          <div class="bank-grid"></div>
         </div>
       </article>
     </template>
@@ -205,6 +239,12 @@
           <button type="button" data-custom-action="subtract" class="secondary">-</button>
           <button type="button" data-custom-action="add">+</button>
         </div>
+      </li>
+    </template>
+
+    <template id="history-item-template">
+      <li>
+        <p class="history-line"></p>
       </li>
     </template>
 
