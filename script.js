@@ -1,7 +1,6 @@
 const STORAGE_KEY = "rifts_dashboard_v1";
 const SAVE_FLASH_MS = 1600;
 const CORE_STAT_ORDER = ["hp", "ppe", "sdc", "mdc", "attacks"];
-const BANK_CURRENCIES = ["credits", "gold", "emeralds", "sapphires", "diamonds", "rubies"];
 const DEFAULT_HISTORY_FILTERS = { character: "all", stat: "all" };
 
 const defaultStats = () => ({
@@ -94,11 +93,31 @@ function normalizeStatValue(value, fallback) {
   return Math.max(0, fallback);
 }
 
-function createDefaultBankValues(source = {}) {
-  return BANK_CURRENCIES.reduce((acc, currency) => {
-    acc[currency] = Math.max(0, asInt(source[currency], 0));
-    return acc;
-  }, {});
+function createBankRow(name = "credits", current = 0) {
+  return {
+    id: uid(),
+    name: (name || "credits").toString(),
+    current: Math.max(0, asInt(current, 0)),
+  };
+}
+
+function createDefaultBankRows(source = null) {
+  if (Array.isArray(source) && source.length > 0) {
+    return source.map((entry, index) => ({
+      id: entry.id || uid(),
+      name: (entry.name || entry.label || `currency ${index + 1}`).toString(),
+      current: Math.max(0, asInt(entry.current, 0)),
+    }));
+  }
+
+  if (source && typeof source === "object") {
+    const entries = Object.entries(source);
+    if (entries.length > 0) {
+      return entries.map(([name, current]) => createBankRow(name, current));
+    }
+  }
+
+  return [createBankRow("credits", 0)];
 }
 
 function buildBaseStats(character, defaults) {
@@ -128,7 +147,7 @@ function normalizeCustomStat(entry, index) {
       id,
       type: "bank",
       label,
-      values: createDefaultBankValues(entry.values || entry.current || {}),
+      rows: createDefaultBankRows(entry.rows || entry.values || entry.current || null),
     };
   }
 
@@ -634,21 +653,21 @@ function resetCustomStat(character, customStat) {
   });
 }
 
-function applyBankChange(character, bankStat, currency, delta, reason) {
-  const before = bankStat.values[currency];
-  bankStat.values[currency] = Math.max(0, before + delta);
-  const appliedDelta = bankStat.values[currency] - before;
+function applyBankChange(character, bankStat, row, delta, reason) {
+  const before = row.current;
+  row.current = Math.max(0, before + delta);
+  const appliedDelta = row.current - before;
   recordHistory(character, {
-    text: `${bankStat.label}: ${currency} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${bankStat.values[currency]})`,
+    text: `${bankStat.label}: ${row.name} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${row.current})`,
     delta: appliedDelta,
     statType: "bank",
     reason,
     undo: {
       kind: "bank",
       statId: bankStat.id,
-      currency,
+      rowId: row.id,
       previousValue: before,
-      nextValue: bankStat.values[currency],
+      nextValue: row.current,
     },
   });
 }
@@ -667,39 +686,96 @@ function wireCustomAdjustment({ customAmountInput, onApply }) {
 }
 
 function buildBankControls(character, bankStat, bankGrid) {
-  BANK_CURRENCIES.forEach((currency) => {
+  bankStat.rows.forEach((row) => {
     const wrapper = document.createElement("section");
     wrapper.className = "bank-currency";
 
-    const title = document.createElement("strong");
-    title.textContent = currency.charAt(0).toUpperCase() + currency.slice(1);
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.value = row.name;
+    nameInput.className = "bank-name-input";
+    nameInput.setAttribute("aria-label", "Currency name");
+    nameInput.addEventListener("change", () => {
+      row.name = nameInput.value.trim() || "credits";
+      nameInput.value = row.name;
+      saveState();
+      renderStats(character);
+    });
 
     const value = document.createElement("span");
     value.className = "bank-value";
-    value.textContent = `${bankStat.values[currency]}`;
+    value.textContent = `${row.current}`;
 
     const controls = document.createElement("div");
     controls.className = "bank-controls";
 
-    [-10, -1, 1, 10].forEach((delta) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = delta < 0 ? "secondary" : "";
-      button.textContent = `${delta > 0 ? "+" : ""}${delta}`;
-      button.addEventListener("click", () => {
-        queueChange({
-          context: `${character.name}: ${bankStat.label} ${currency} ${delta > 0 ? "+" : ""}${delta}`,
-          apply: (reason) => {
-            applyBankChange(character, bankStat, currency, delta, reason);
-          },
-        });
+    const amountInput = document.createElement("input");
+    amountInput.type = "number";
+    amountInput.min = "0";
+    amountInput.step = "1";
+    amountInput.value = "1";
+    amountInput.className = "bank-amount-input";
+    amountInput.setAttribute("aria-label", `Amount for ${row.name}`);
+
+    const subtractButton = document.createElement("button");
+    subtractButton.type = "button";
+    subtractButton.className = "secondary";
+    subtractButton.textContent = "-";
+    subtractButton.addEventListener("click", () => {
+      const amount = Math.max(0, asInt(amountInput.value, 0));
+      if (amount === 0) return;
+      queueChange({
+        context: `${character.name}: ${bankStat.label} ${row.name} -${amount}`,
+        apply: (reason) => {
+          applyBankChange(character, bankStat, row, -amount, reason);
+        },
       });
-      controls.append(button);
     });
 
-    wrapper.append(title, value, controls);
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.textContent = "+";
+    addButton.addEventListener("click", () => {
+      const amount = Math.max(0, asInt(amountInput.value, 0));
+      if (amount === 0) return;
+      queueChange({
+        context: `${character.name}: ${bankStat.label} ${row.name} +${amount}`,
+        apply: (reason) => {
+          applyBankChange(character, bankStat, row, amount, reason);
+        },
+      });
+    });
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "danger";
+    removeButton.textContent = "×";
+    removeButton.addEventListener("click", () => {
+      const confirmed = window.confirm(`Delete currency row "${row.name}"?`);
+      if (!confirmed) return;
+      bankStat.rows = bankStat.rows.filter((entry) => entry.id !== row.id);
+      if (bankStat.rows.length === 0) {
+        bankStat.rows.push(createBankRow("credits", 0));
+      }
+      saveState();
+      renderStats(character);
+    });
+
+    controls.append(amountInput, subtractButton, addButton, removeButton);
+    wrapper.append(nameInput, value, controls);
     bankGrid.append(wrapper);
   });
+
+  const addCurrencyButton = document.createElement("button");
+  addCurrencyButton.type = "button";
+  addCurrencyButton.className = "secondary add-bank-row";
+  addCurrencyButton.textContent = "+ Add Currency";
+  addCurrencyButton.addEventListener("click", () => {
+    bankStat.rows.push(createBankRow(`currency ${bankStat.rows.length + 1}`, 0));
+    saveState();
+    renderStats(character);
+  });
+  bankGrid.append(addCurrencyButton);
 }
 
 function renderStats(character) {
@@ -974,7 +1050,11 @@ function runUndo(character) {
     if (!bankStat) {
       return;
     }
-    bankStat.values[entry.undo.currency] = entry.undo.previousValue;
+    const bankRow = bankStat.rows.find((item) => item.id === entry.undo.rowId) || bankStat.rows.find((item) => item.name === entry.undo.currency);
+    if (!bankRow) {
+      return;
+    }
+    bankRow.current = entry.undo.previousValue;
   } else {
     return;
   }
@@ -1137,7 +1217,7 @@ addStatBlockButton.addEventListener("click", () => {
         id: uid(),
         type: "bank",
         label: cleanLabel,
-        values: createDefaultBankValues(),
+        rows: createDefaultBankRows(),
       }
     : {
         id: uid(),
