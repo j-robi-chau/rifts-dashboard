@@ -303,10 +303,21 @@ select:focus-visible,
   font-weight: 700;
 }
 
+
+.bank-name-input,
+.bank-amount-input {
+  width: 100%;
+}
+
 .bank-controls {
-  display: flex;
+  display: grid;
   gap: 0.35rem;
-  flex-wrap: wrap;
+  grid-template-columns: minmax(90px, 1fr) auto auto auto;
+  align-items: center;
+}
+
+.add-bank-row {
+  width: 100%;
 }
 
 .checkbox-label {
@@ -361,7 +372,8 @@ menu {
 @media (max-width: 560px) {
   .custom-controls,
   .history-filters,
-  .bank-grid {
+  .bank-grid,
+  .bank-controls {
     grid-template-columns: 1fr;
   }
 
