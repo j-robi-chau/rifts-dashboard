@@ -282,42 +282,11 @@ select:focus-visible,
   margin: 0;
 }
 
-.bank-grid {
+.bank-row-controls {
   display: grid;
-  gap: 0.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.bank-currency {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0.45rem;
-  display: grid;
-  gap: 0.35rem;
-  background: rgb(255 255 255 / 0.03);
-}
-
-.bank-value {
-  color: var(--accent);
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-
-.bank-name-input,
-.bank-amount-input {
-  width: 100%;
-}
-
-.bank-controls {
-  display: grid;
-  gap: 0.35rem;
-  grid-template-columns: minmax(90px, 1fr) auto auto auto;
-  align-items: center;
-}
-
-.add-bank-row {
-  width: 100%;
+  gap: 0.45rem;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto;
+  align-items: end;
 }
 
 .checkbox-label {
@@ -372,8 +341,7 @@ menu {
 @media (max-width: 560px) {
   .custom-controls,
   .history-filters,
-  .bank-grid,
-  .bank-controls {
+  .bank-row-controls {
     grid-template-columns: 1fr;
   }
 

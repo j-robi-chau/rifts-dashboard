@@ -32,6 +32,10 @@ const ammoList = document.querySelector("#ammo-list");
 const addAmmoForm = document.querySelector("#add-ammo-form");
 const ammoWeaponInput = document.querySelector("#ammo-weapon");
 const ammoMaxInput = document.querySelector("#ammo-max");
+const bankList = document.querySelector("#bank-list");
+const addBankForm = document.querySelector("#add-bank-form");
+const bankCurrencyInput = document.querySelector("#bank-currency");
+const bankAmountInput = document.querySelector("#bank-amount");
 const characterHistory = document.querySelector("#character-history");
 const globalHistory = document.querySelector("#global-history");
 const historyCharacterFilter = document.querySelector("#history-character-filter");
@@ -138,19 +142,8 @@ function buildBaseStats(character, defaults) {
 }
 
 function normalizeCustomStat(entry, index) {
-  const type = (entry.type || "custom").toString().trim().toLowerCase();
   const id = entry.id || uid();
-  const label = (entry.label || entry.title || (type === "bank" ? "Bank" : `Custom ${index + 1}`)).toString().trim() || `Custom ${index + 1}`;
-
-  if (type === "bank") {
-    return {
-      id,
-      type: "bank",
-      label,
-      rows: createDefaultBankRows(entry.rows || entry.values || entry.current || null),
-    };
-  }
-
+  const label = (entry.label || entry.title || `Custom ${index + 1}`).toString().trim() || `Custom ${index + 1}`;
   const base = normalizeStatValue(entry.base, normalizeStatValue(entry.current, 0));
   return {
     id,
@@ -159,6 +152,25 @@ function normalizeCustomStat(entry, index) {
     base,
     current: normalizeStatValue(entry.current, base),
   };
+}
+
+function migrateBankRows(character) {
+  const bankRows = [];
+
+  if (Array.isArray(character.bank)) {
+    bankRows.push(...createDefaultBankRows(character.bank));
+  }
+
+  const bankCustomStats = Array.isArray(character.customStats)
+    ? character.customStats.filter((entry) => (entry.type || "").toString().trim().toLowerCase() === "bank")
+    : [];
+
+  bankCustomStats.forEach((entry) => {
+    bankRows.push(...createDefaultBankRows(entry.rows || entry.values || entry.current || null));
+  });
+
+  const filteredRows = bankRows.filter((row) => typeof row === "object" && row && (row.name || row.current !== undefined));
+  return filteredRows.length > 0 ? filteredRows : [createBankRow("credits", 0)];
 }
 
 function coreStatIds() {
@@ -234,7 +246,11 @@ function sanitizeForDisplay(stateToFix) {
     if (!Array.isArray(character.customStats)) {
       character.customStats = [];
     }
-    character.customStats = character.customStats.map(normalizeCustomStat);
+    const migratedBankRows = migrateBankRows(character);
+    character.customStats = character.customStats
+      .filter((entry) => (entry.type || "custom").toString().trim().toLowerCase() !== "bank")
+      .map(normalizeCustomStat);
+    character.bank = createDefaultBankRows(character.bank || migratedBankRows);
 
     if (!Array.isArray(character.ammo)) {
       character.ammo = [];
@@ -314,6 +330,7 @@ function createCharacter(name, baseStats) {
     notes: "",
     sessionNotes: "",
     ammo: [],
+    bank: [createBankRow("credits", 0)],
     customStats: [],
     statOrder: coreStatIds(),
     history: [],
@@ -327,6 +344,7 @@ function duplicateCharacter(sourceCharacter) {
   duplicate.name = `${sourceCharacter.name} Copy`;
   duplicate.ammo = duplicate.ammo.map((entry) => ({ ...entry, id: uid() }));
   duplicate.customStats = duplicate.customStats.map((entry) => ({ ...entry, id: uid() }));
+  duplicate.bank = Array.isArray(duplicate.bank) ? duplicate.bank.map((entry) => ({ ...entry, id: uid() })) : [createBankRow("credits", 0)];
   duplicate.statOrder = [];
   duplicate.history = [];
   ensureStatOrder(duplicate);
@@ -523,6 +541,7 @@ function renderDetail() {
   undoLastActionButton.disabled = !getLastUndoableEntry(character);
   renderStats(character);
   renderAmmo(character);
+  renderBank(character);
   renderCharacterHistory(character);
 }
 
@@ -577,7 +596,7 @@ function deleteStatBlock(character, block) {
 
   recordHistory(character, {
     text: `Deleted stat block: ${block.label}`,
-    statType: block.type === "core" ? block.statKey : block.type === "bank" ? "bank" : `custom:${block.label}`,
+    statType: block.type === "core" ? block.statKey : `custom:${block.label}`,
     reason: "System",
   });
 }
@@ -653,129 +672,56 @@ function resetCustomStat(character, customStat) {
   });
 }
 
-function applyBankChange(character, bankStat, row, delta, reason) {
-  const before = row.current;
-  row.current = Math.max(0, before + delta);
-  const appliedDelta = row.current - before;
-  recordHistory(character, {
-    text: `${bankStat.label}: ${row.name} ${appliedDelta >= 0 ? "+" : ""}${appliedDelta} (${row.current})`,
-    delta: appliedDelta,
-    statType: "bank",
-    reason,
-    undo: {
-      kind: "bank",
-      statId: bankStat.id,
-      rowId: row.id,
-      previousValue: before,
-      nextValue: row.current,
-    },
-  });
-}
+function renderBank(character) {
+  bankList.innerHTML = "";
 
-function wireCustomAdjustment({ customAmountInput, onApply }) {
-  const customButtons = customAmountInput.closest(".custom-controls").querySelectorAll("button[data-custom-action]");
+  character.bank.forEach((row) => {
+    const item = document.createElement("li");
+    item.className = "ammo-item";
 
-  customButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const amount = Math.max(1, asInt(customAmountInput.value, 1));
-      customAmountInput.value = amount;
-      const signedAmount = button.dataset.customAction === "subtract" ? -amount : amount;
-      onApply(signedAmount);
-    });
-  });
-}
-
-function buildBankControls(character, bankStat, bankGrid) {
-  bankStat.rows.forEach((row) => {
-    const wrapper = document.createElement("section");
-    wrapper.className = "bank-currency";
-
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.value = row.name;
-    nameInput.className = "bank-name-input";
-    nameInput.setAttribute("aria-label", "Currency name");
-    nameInput.addEventListener("change", () => {
-      row.name = nameInput.value.trim() || "credits";
-      nameInput.value = row.name;
+    const currencyLabel = document.createElement("label");
+    currencyLabel.textContent = "Currency";
+    const currencyInput = document.createElement("input");
+    currencyInput.type = "text";
+    currencyInput.value = row.name;
+    currencyInput.addEventListener("change", () => {
+      row.name = currencyInput.value.trim() || "credits";
+      currencyInput.value = row.name;
       saveState();
-      renderStats(character);
     });
+    currencyLabel.append(currencyInput);
 
-    const value = document.createElement("span");
-    value.className = "bank-value";
-    value.textContent = `${row.current}`;
-
-    const controls = document.createElement("div");
-    controls.className = "bank-controls";
-
+    const amountLabel = document.createElement("label");
+    amountLabel.textContent = "Amount";
     const amountInput = document.createElement("input");
     amountInput.type = "number";
     amountInput.min = "0";
     amountInput.step = "1";
-    amountInput.value = "1";
-    amountInput.className = "bank-amount-input";
-    amountInput.setAttribute("aria-label", `Amount for ${row.name}`);
-
-    const subtractButton = document.createElement("button");
-    subtractButton.type = "button";
-    subtractButton.className = "secondary";
-    subtractButton.textContent = "-";
-    subtractButton.addEventListener("click", () => {
-      const amount = Math.max(0, asInt(amountInput.value, 0));
-      if (amount === 0) return;
-      queueChange({
-        context: `${character.name}: ${bankStat.label} ${row.name} -${amount}`,
-        apply: (reason) => {
-          applyBankChange(character, bankStat, row, -amount, reason);
-        },
-      });
+    amountInput.value = `${Math.max(0, asInt(row.current, 0))}`;
+    amountInput.addEventListener("change", () => {
+      row.current = Math.max(0, asInt(amountInput.value, 0));
+      amountInput.value = `${row.current}`;
+      saveState();
     });
-
-    const addButton = document.createElement("button");
-    addButton.type = "button";
-    addButton.textContent = "+";
-    addButton.addEventListener("click", () => {
-      const amount = Math.max(0, asInt(amountInput.value, 0));
-      if (amount === 0) return;
-      queueChange({
-        context: `${character.name}: ${bankStat.label} ${row.name} +${amount}`,
-        apply: (reason) => {
-          applyBankChange(character, bankStat, row, amount, reason);
-        },
-      });
-    });
+    amountLabel.append(amountInput);
 
     const removeButton = document.createElement("button");
     removeButton.type = "button";
     removeButton.className = "danger";
-    removeButton.textContent = "×";
+    removeButton.textContent = "x";
     removeButton.addEventListener("click", () => {
-      const confirmed = window.confirm(`Delete currency row "${row.name}"?`);
-      if (!confirmed) return;
-      bankStat.rows = bankStat.rows.filter((entry) => entry.id !== row.id);
-      if (bankStat.rows.length === 0) {
-        bankStat.rows.push(createBankRow("credits", 0));
-      }
+      character.bank = character.bank.filter((entry) => entry.id !== row.id);
       saveState();
-      renderStats(character);
+      renderBank(character);
     });
 
-    controls.append(amountInput, subtractButton, addButton, removeButton);
-    wrapper.append(nameInput, value, controls);
-    bankGrid.append(wrapper);
-  });
+    const controls = document.createElement("div");
+    controls.className = "bank-row-controls";
+    controls.append(currencyLabel, amountLabel, removeButton);
 
-  const addCurrencyButton = document.createElement("button");
-  addCurrencyButton.type = "button";
-  addCurrencyButton.className = "secondary add-bank-row";
-  addCurrencyButton.textContent = "+ Add Currency";
-  addCurrencyButton.addEventListener("click", () => {
-    bankStat.rows.push(createBankRow(`currency ${bankStat.rows.length + 1}`, 0));
-    saveState();
-    renderStats(character);
+    item.append(controls);
+    bankList.append(item);
   });
-  bankGrid.append(addCurrencyButton);
 }
 
 function renderStats(character) {
@@ -787,9 +733,6 @@ function renderStats(character) {
     const label = fragment.querySelector(".stat-label");
     const headerValue = fragment.querySelector(".stat-header-value");
     const value = fragment.querySelector(".stat-value");
-    const defaultBody = fragment.querySelector(".default-stat-body");
-    const bankBody = fragment.querySelector(".bank-stat-body");
-    const bankGrid = fragment.querySelector(".bank-grid");
     const quickButtons = fragment.querySelectorAll(".quick-controls button[data-delta]");
     const resetButton = fragment.querySelector(".reset-to-base");
     const customAmountInput = fragment.querySelector(".mod-input");
@@ -841,15 +784,6 @@ function renderStats(character) {
           });
         },
       });
-    } else if (block.type === "bank") {
-      defaultBody.hidden = true;
-      bankBody.hidden = false;
-      headerValue.textContent = "Currencies";
-      deleteButton.hidden = false;
-      deleteButton.addEventListener("click", () => {
-        deleteStatBlock(character, block);
-      });
-      buildBankControls(character, block.customStat, bankGrid);
     } else {
       headerValue.textContent = `${block.customStat.current}`;
       value.textContent = `${block.customStat.current} (Base ${block.customStat.base})`;
@@ -1046,11 +980,7 @@ function runUndo(character) {
     }
     customStat.current = entry.undo.previousValue;
   } else if (entry.undo.kind === "bank") {
-    const bankStat = character.customStats.find((item) => item.id === entry.undo.statId && item.type === "bank");
-    if (!bankStat) {
-      return;
-    }
-    const bankRow = bankStat.rows.find((item) => item.id === entry.undo.rowId) || bankStat.rows.find((item) => item.name === entry.undo.currency);
+    const bankRow = character.bank.find((item) => item.id === entry.undo.rowId) || character.bank.find((item) => item.name === entry.undo.currency);
     if (!bankRow) {
       return;
     }
@@ -1194,14 +1124,12 @@ addStatBlockButton.addEventListener("click", () => {
     return;
   }
 
-  const typeInput = window.prompt("Stat type (Custom or Bank)", "Custom");
+  const typeInput = window.prompt("Stat type (Custom)", "Custom");
   if (typeInput === null) {
     return;
   }
 
-  const normalizedType = typeInput.trim().toLowerCase();
-  const isBank = normalizedType === "bank";
-  const label = window.prompt("Stat title/label", isBank ? "Bank" : "Custom Stat");
+  const label = window.prompt("Stat title/label", "Custom Stat");
   if (label === null) {
     return;
   }
@@ -1212,24 +1140,15 @@ addStatBlockButton.addEventListener("click", () => {
     return;
   }
 
-  const newStat = isBank
-    ? {
-        id: uid(),
-        type: "bank",
-        label: cleanLabel,
-        rows: createDefaultBankRows(),
-      }
-    : {
-        id: uid(),
-        type: "custom",
-        label: cleanLabel,
-        base: Math.max(0, asInt(window.prompt("Base value", "0"), 0)),
-        current: 0,
-      };
+  const newStat = {
+    id: uid(),
+    type: "custom",
+    label: cleanLabel,
+    base: Math.max(0, asInt(window.prompt("Base value", "0"), 0)),
+    current: 0,
+  };
 
-  if (!isBank) {
-    newStat.current = newStat.base;
-  }
+  newStat.current = newStat.base;
 
   character.customStats.push(newStat);
   character.statOrder.push(`custom:${newStat.id}`);
@@ -1317,6 +1236,27 @@ addAmmoForm.addEventListener("submit", (event) => {
   addAmmoForm.reset();
   ammoMaxInput.value = "20";
 });
+
+addBankForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const character = selectedCharacter();
+  if (!character) {
+    return;
+  }
+
+  const currency = bankCurrencyInput.value.trim();
+  const amount = Math.max(0, asInt(bankAmountInput.value, 0));
+  if (!currency) {
+    return;
+  }
+
+  character.bank.push(createBankRow(currency, amount));
+  saveState();
+  renderBank(character);
+  addBankForm.reset();
+  bankAmountInput.value = "0";
+});
+
 
 logDialogForm.addEventListener("submit", (event) => {
   const submitButton = event.submitter;
